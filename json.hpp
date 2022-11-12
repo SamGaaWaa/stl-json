@@ -461,8 +461,6 @@ namespace json {
                                         ++_iter;
                                         continue;
                                     default:
-                                        //                                    _last_token = Token::ERROR;
-                                        //                                    return Token::ERROR;
                                         ++_iter;
                                         continue;
                                 }
@@ -1095,7 +1093,20 @@ namespace json {
         };
     }
 
+    json::object parse(const char* begin, const char* end) {
+        json::_detail::_Parser parser;
+        parser.set_buffer(begin, end);
+        auto res = parser.parse();
+        if (res != _detail::_Parser::result::finished)
+            throw std::invalid_argument{ "Invalid format." };
+        return parser.get_result().value();
+    }
 
+    std::string to_json(const json::object& obj) {
+        _detail::_Serializer serializer;
+        serializer(obj);
+        return serializer.get_result();
+    }
 }
 
 
