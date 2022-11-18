@@ -19,7 +19,7 @@ void file_test() {
         auto obj = json::parse(path, 1);        //缓冲区设置为1，逐个字符解析
         std::cout << "size=" << obj.size() << '\n';
         std::cout << "json:\n" << json::to_json(obj) << '\n';
-        std::ofstream os{R"(test/result.json)"};
+        std::ofstream os{R"(test/test.json)"};
 
         obj.insert({"array", json::array{{ {123}, {"123"} }}});
 
