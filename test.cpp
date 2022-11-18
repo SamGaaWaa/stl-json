@@ -1,56 +1,37 @@
-#include "json.hpp"
-
 #include <iostream>
-#include "stdio.h"
+#include <fstream>
+
+#include "json.h"
+
+void c_str_test() {
+    const char *json = R"({})";
+
+    auto obj = json::parse(json, json + strlen(json));
+    obj["version"] = {1.1};
+    auto str = json::to_json(obj);
+
+    std::cout << "json: \n" << str << '\n';
+}
+
+void file_test() {
+    try {
+        const char *path = R"(face.json)";
+        auto obj = json::parse(path, 1);        //缓冲区设置为1，逐个字符解析
+        std::cout << "size=" << obj.size() << '\n';
+        std::cout << "json:\n" << json::to_json(obj) << '\n';
+        std::ofstream os{R"(result.json)"};
+
+        obj.insert({"array", json::array{{ {123}, {"123"} }}});
+
+        os << json::to_json(obj);
+        os.close();
+
+    } catch (const std::exception &e) {
+        std::cout << e.what() << '\n';
+    }
+}
 
 int main() {
-    auto path = R"(test/face.json)";
-
-    auto fd = fopen(path, "rt");
-    std::string str;
-    std::array<char, 1024> buffer;
-
-    unsigned int ret;
-    while ((ret = fread(buffer.data(), 1, buffer.size(), fd)) == buffer.size())
-        str.append(buffer.data(), buffer.data() + buffer.size());
-    if (feof(fd)) {
-        str.append(buffer.data(), buffer.data() + ret);
-        std::cout << str << '\n';
-        fclose(fd);
-    }
-    else if (ferror(fd)) {
-        std::cerr << "Read file failed.\n";
-        fclose(fd);
-        return -1;
-    }
-
-    json::_detail::_Parser parser;
-    parser.set_buffer(str.data(), str.data() + str.size());
-
-    auto res = parser.parse();
-    if (res == json::_detail::_Parser::result::finished) {
-        std::optional<json::object> objp = parser.get_result();
-        if (objp) {
-            json::object obj = std::move(*objp);
-
-            obj["version"] = 1.0;
-
-            auto serializer = json::_detail::_Serializer{};
-            serializer(obj);
-            std::string json_str = serializer.get_result();
-
-            std::cout << json_str << '\n';
-
-            fd = fopen(R"(test/test.json)", "w");
-
-            ret = fwrite(json_str.data(), 1, json_str.size(), fd);
-            if (ret < json_str.size()) {
-                std::cerr << "write file error.\n";
-            }
-        }
-    }
-    else
-        std::cout << "error occurred.\n" << "res ="
-        << (res == json::_detail::_Parser::result::error ? "error" : "buffer end") << '\n';
-
+    c_str_test();
+    file_test();
 }
