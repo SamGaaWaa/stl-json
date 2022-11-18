@@ -1,7 +1,7 @@
-all: build/test.out
+all: test.out
 
-build/test.out: test.cpp json.hpp
-	g++ -std=c++23 -O0 -g $^ -o $@
+test.out: test.cpp json.hpp
+	g++  -O3 $^ -o $@
 
 clean:
-	rm build/* -rf
+	rm test.out
