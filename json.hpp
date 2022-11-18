@@ -352,6 +352,11 @@ namespace json {
                                 case '\t':
                                     _last_token = Token::Number;
                                     return Token::Number;
+                                case 'e':
+                                    _state = State::P_NUM_DOT_NUM_E;
+                                    _double.push_back(c);
+                                    ++_iter;
+                                    continue;
                                 case '0':
                                 case '1':
                                 case '2':
