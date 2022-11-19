@@ -1,7 +1,7 @@
 all: test.out
 
 test.out: test.cpp json.hpp
-	g++  -O3 $^ -o $@
+	g++  -O0 -g -fpermissive $^ -o $@
 
 clean:
 	rm test.out
