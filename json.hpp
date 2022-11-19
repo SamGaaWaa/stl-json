@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <new>
+#include <cstring>
 
 namespace json {
 
@@ -34,7 +35,9 @@ namespace json {
                     _num = other._num;
                     break;
                 case Type::String:
-                    ::new(&_str) std::string(other._str);
+                    _str = ::new std::string(
+                        *static_cast<std::string*>(other._str)
+                    );
                     break;
                 case Type::Null:
                     break;
@@ -64,7 +67,9 @@ namespace json {
                     _num = other._num;
                     break;
                 case Type::String:
-                    ::new(&_str) std::string(std::move(other._str));
+                    _str = ::new std::string(
+                        std::move(*static_cast<std::string*>(other._str))
+                    );
                     break;
                 case Type::Null:
                     break;
@@ -101,15 +106,15 @@ namespace json {
         }
 
         value(const std::string& str): _type{ Type::String } {
-            ::new(&this->_str) std::string(str);
+            _str = ::new std::string(str);
         }
 
         value(std::string&& str) noexcept: _type{ Type::String } {
-            ::new(&this->_str) std::string(std::move(str));
+            _str = ::new std::string(std::move(str));
         }
 
         value(const char* str): _type{ Type::String } {
-            ::new(&this->_str) std::string(str);
+            _str = ::new std::string(str);
         }
 
         value(const std::vector<value>& array): _type{ Type::Array } {
@@ -129,6 +134,10 @@ namespace json {
         }
 
         value(Type) noexcept: _type{ Type::Null } {}
+
+        friend bool operator==(const value&, const value&);
+        friend bool operator!=(const value&, const value&);
+
 
         value& operator=(double x) noexcept {
             _destroy();
@@ -154,21 +163,21 @@ namespace json {
         value& operator=(const std::string& str) {
             _destroy();
             _type = Type::String;
-            ::new(&_str) std::string(str);
+            _str = ::new std::string(str);
             return *this;
         }
 
         value& operator=(std::string&& str) noexcept {
             _destroy();
             _type = Type::String;
-            ::new(&_str) std::string(std::move(str));
+            _str = ::new std::string(std::move(str));
             return *this;
         }
 
         value& operator=(const char* str) {
             _destroy();
             _type = Type::String;
-            ::new(&str) std::string(str);
+            _str = ::new std::string(str);
             return *this;
         }
 
@@ -233,13 +242,13 @@ namespace json {
         [[nodiscard]] const std::string& get_string() const {
             if (_type != Type::String)
                 throw std::runtime_error{ "The value isn't a string." };
-            return _str;
+            return *static_cast<std::string*>(_str);
         }
 
         [[nodiscard]] std::string& get_string() {
             if (_type != Type::String)
                 throw std::runtime_error{ "The value isn't a string." };
-            return _str;
+            return *static_cast<std::string*>(_str);
         }
 
         [[nodiscard]] const std::vector<value>& get_array() const {
@@ -281,7 +290,7 @@ namespace json {
                 case Type::Nothing:
                     return;
                 case Type::String:
-                    _str.std::string::~string();
+                    delete static_cast<std::string*>(_str);
                     return;
                 case Type::Array:
                     delete static_cast<std::vector<value>*>(_arr);
@@ -296,12 +305,39 @@ namespace json {
         union {
             double _num;
             bool _b;
-            std::string _str;
             void* _arr;
             void* _obj;
+            void* _str;
         };
 
     };
+
+    bool operator==(const value& x, const value& y) {
+        if (x._type == y._type) {
+            switch (x._type) {
+                case value::Type::Number:
+                    return x._num == y._num;
+                case value::Type::String:
+                    return *(static_cast<std::string*>(x._str)) == *(static_cast<std::string*>(y._str));
+                case value::Type::Null:
+                case value::Type::False:
+                case value::Type::True:
+                case value::Type::Nothing:
+                    return true;
+                case value::Type::Array:
+                    return *(static_cast<std::vector<value>*>(x._arr)) == *(static_cast<std::vector<value>*>(y._arr));
+                case value::Type::Object:
+                    return *(static_cast<std::unordered_map<std::string, value>*>(x._obj)) ==
+                        *(static_cast<std::unordered_map<std::string, value>*>(y._obj));
+            }
+        }
+        return false;
+    }
+
+    bool operator!=(const value& x, const value& y) {
+        return !(x == y);
+    }
+
 
     using object = std::unordered_map<std::string, value>;
     using array = std::vector<value>;
@@ -1294,16 +1330,26 @@ namespace json {
         };
     }
 
-    json::object parse(const char* begin, const char* end) {
+
+
+    json::object parse(const char* first, const char* last) {
         json::_detail::_Parser parser;
-        parser.set_buffer(begin, end);
+        parser.set_buffer(first, last);
         auto res = parser.parse();
         if (res != _detail::_Parser::result::finished)
             throw std::invalid_argument{ "Invalid format." };
         return parser.get_result();
     }
 
-    json::object parse(const char* path, size_t buff_s = 4096) {
+    json::object from_string(const char* str) {
+        return parse(str, str + strlen(str));
+    }
+
+    json::object from_string(const std::string& str) {
+        return parse(str.data(), str.data() + str.size());
+    }
+
+    json::object from_file(const char* path, size_t buff_s = 4096) {
         std::string buffer;
         _detail::_Parser parser;
         size_t res = 0;

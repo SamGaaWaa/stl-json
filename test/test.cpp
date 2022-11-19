@@ -1,6 +1,5 @@
 #include <iostream>
 #include <fstream>
-#include <cstring>
 
 #include "json.hpp"
 
@@ -10,7 +9,7 @@ void c_str_test() {
     "face_list": [
 null]})";
 
-    auto obj = json::parse(json, json + strlen(json));
+    auto obj = json::from_string(json);
     obj["version"] = { 1.1 };
     auto str = json::to_json(obj);
 
@@ -20,7 +19,7 @@ null]})";
 void file_test() {
     try {
         const char* path = R"(./test/face.json)";
-        auto obj = json::parse(path, 1);        //缓冲区设置为1，逐个字符解析
+        auto obj = json::from_file(path, 1);        //缓冲区设置为1，逐个字符解析
         std::cout << "size=" << obj.size() << '\n';
         std::cout << "json:\n" << json::to_json(obj) << '\n';
         std::ofstream os{ R"(./test/test.json)" };
