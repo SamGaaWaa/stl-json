@@ -4,13 +4,10 @@
 #include "json.hpp"
 
 void c_str_test() {
-    const char* json = R"({
-    "face_num": 1,
-    "face_list": [
-null]})";
+    const char* json = R"( {"face_num": 1,"face_list": [null]} )";
 
     auto obj = json::from_string(json);
-    obj["version"] = { 1.1 };
+    obj["version"] = 1.1;
     auto str = json::to_json(obj);
 
     std::cout << "json: \n" << str << '\n';
@@ -24,7 +21,7 @@ void file_test() {
         std::cout << "json:\n" << json::to_json(obj) << '\n';
         std::ofstream os{ R"(./test/test.json)" };
 
-        obj.insert({ "array", json::array{{ {123}, {"123"} }} });
+        obj.insert({ "array", json::array{{ 123, "123" }} });
 
         os << json::to_json(obj);
         os.close();

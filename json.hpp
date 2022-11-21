@@ -11,8 +11,6 @@
 #include <cstring>
 
 namespace json {
-
-
     struct value {
         enum struct Type {
             Number,
@@ -47,12 +45,12 @@ namespace json {
                     break;
                 case Type::Array:
                     _arr = static_cast<void*>(::new std::vector<value>(
-                        *static_cast<std::vector<value>*>(other._arr)
+                        *static_cast<std::vector<value> *>(other._arr)
                         ));
                     break;
                 case Type::Object:
                     _obj = ::new std::unordered_map<std::string, value>(
-                        *static_cast<std::unordered_map<std::string, value>*>(other._obj)
+                        *static_cast<std::unordered_map<std::string, value> *>(other._obj)
                         );
                     break;
                 case Type::Nothing:
@@ -67,9 +65,8 @@ namespace json {
                     _num = other._num;
                     break;
                 case Type::String:
-                    _str = ::new std::string(
-                        std::move(*static_cast<std::string*>(other._str))
-                    );
+                    _str = other._str;
+                    other._type = Type::Nothing;
                     break;
                 case Type::Null:
                     break;
@@ -78,14 +75,12 @@ namespace json {
                     _b = other._b;
                     break;
                 case Type::Array:
-                    _arr = ::new std::vector<value>(
-                        std::move(*static_cast<std::vector<value>*>(other._arr))
-                        );
+                    _arr = other._arr;
+                    other._type = Type::Nothing;
                     break;
                 case Type::Object:
-                    _obj = ::new std::unordered_map<std::string, value>(
-                        std::move(*static_cast<std::unordered_map<std::string, value>*>(other._obj))
-                        );
+                    _obj = other._obj;
+                    other._type = Type::Nothing;
                     break;
                 case Type::Nothing:
                     break;
@@ -105,39 +100,114 @@ namespace json {
             _type = b ? Type::True : Type::False;
         }
 
-        value(const std::string& str): _type{ Type::String } {
+        value(const std::string& str) {
             _str = ::new std::string(str);
+            _type = Type::String;
         }
 
-        value(std::string&& str) noexcept: _type{ Type::String } {
+        value(std::string&& str) {
             _str = ::new std::string(std::move(str));
+            _type = Type::String;
         }
 
-        value(const char* str): _type{ Type::String } {
+        value(const char* str) {
             _str = ::new std::string(str);
+            _type = Type::String;
         }
 
-        value(const std::vector<value>& array): _type{ Type::Array } {
+        value(const std::vector<value>& array) {
             _arr = ::new std::vector<value>(array);
+            _type = Type::Array;
         }
 
-        value(std::vector<value>&& array) noexcept: _type{ Type::Array } {
+        value(std::vector<value>&& array) {
             _arr = ::new std::vector<value>(std::move(array));
+            _type = Type::Array;
         }
 
-        value(const std::unordered_map<std::string, value>& obj): _type{ Type::Object } {
+        value(const std::unordered_map<std::string, value>& obj) {
             _obj = ::new std::unordered_map<std::string, value>(obj);
+            _type = Type::Object;
         }
 
-        value(std::unordered_map<std::string, value>&& obj) noexcept: _type{ Type::Object } {
+        value(std::unordered_map<std::string, value>&& obj) {
             _obj = ::new std::unordered_map<std::string, value>(std::move(obj));
+            _type = Type::Object;
         }
 
         value(Type) noexcept: _type{ Type::Null } {}
 
         friend bool operator==(const value&, const value&);
+
         friend bool operator!=(const value&, const value&);
 
+        value& operator[](const std::string& key) {
+            return get_object()[key];
+        }
+
+        const value& operator[](const std::string& key)const {
+            return get_object().at(key);
+        }
+
+        value& operator=(const value& other) {
+            if (this == std::addressof(other))
+                return *this;
+            if (_type != other._type) {
+                _destroy();
+                _type = other._type;
+            }
+            switch (_type) {
+                case Type::Number:
+                    _num = other._num;
+                    break;
+                case Type::String:
+                    _str = ::new std::string(*static_cast<std::string*>(other._str));
+                    break;
+                case Type::Null:
+                case Type::False:
+                case Type::True:
+                    break;
+                case Type::Array:
+                    _arr = ::new std::vector<value>(*static_cast<std::vector<value>*>(other._arr));
+                    break;
+                case Type::Object:
+                    _obj = ::new std::unordered_map<std::string, value>(
+                        *static_cast<std::unordered_map<std::string, value>*>(other._obj)
+                        );
+                    break;
+                case Type::Nothing:
+                    break;
+            }
+            return *this;
+        }
+
+        value& operator=(value&& other)noexcept {
+            if (_type != other._type) {
+                _destroy();
+                _type = other._type;
+            }
+            other._type = Type::Nothing;
+            switch (_type) {
+                case Type::Number:
+                    _num = other._num;
+                    break;
+                case Type::String:
+                    _str = other._str;
+                    break;
+                case Type::Null:
+                case Type::False:
+                case Type::True:
+                    break;
+                case Type::Array:
+                    _arr = other._arr;
+                    break;
+                case Type::Object:
+                    _obj = other._obj;
+                    break;
+                case Type::Nothing:;
+            }
+            return *this;
+        }
 
         value& operator=(double x) noexcept {
             _destroy();
@@ -162,50 +232,50 @@ namespace json {
 
         value& operator=(const std::string& str) {
             _destroy();
-            _type = Type::String;
             _str = ::new std::string(str);
+            _type = Type::String;
             return *this;
         }
 
-        value& operator=(std::string&& str) noexcept {
+        value& operator=(std::string&& str) {
             _destroy();
-            _type = Type::String;
             _str = ::new std::string(std::move(str));
+            _type = Type::String;
             return *this;
         }
 
         value& operator=(const char* str) {
             _destroy();
-            _type = Type::String;
             _str = ::new std::string(str);
+            _type = Type::String;
             return *this;
         }
 
         value& operator=(const std::vector<value>& array) {
             _destroy();
-            _type = Type::Array;
             _arr = ::new std::vector<value>(array);
+            _type = Type::Array;
             return *this;
         }
 
-        value& operator=(std::vector<value>&& array) noexcept {
+        value& operator=(std::vector<value>&& array) {
             _destroy();
-            _type = Type::Array;
             _arr = ::new std::vector<value>(std::move(array));
+            _type = Type::Array;
             return *this;
         }
 
         value& operator=(const std::unordered_map<std::string, value>& obj) {
             _destroy();
-            _type = Type::Object;
             _obj = ::new std::unordered_map<std::string, value>(obj);
+            _type = Type::Object;
             return *this;
         }
 
-        value& operator=(std::unordered_map<std::string, value>&& obj) noexcept {
+        value& operator=(std::unordered_map<std::string, value>&& obj) {
             _destroy();
-            _type = Type::Object;
             _obj = ::new std::unordered_map<std::string, value>(std::move(obj));
+            _type = Type::Object;
             return *this;
         }
 
@@ -214,6 +284,12 @@ namespace json {
             _type = Type::Null;
             return *this;
         }
+
+        [[nodiscard]] bool is_number()const noexcept { return _type == Type::Number; }
+        [[nodiscard]] bool is_bool()const noexcept { return _type == Type::True || _type == Type::False; }
+        [[nodiscard]] bool is_string()const noexcept { return _type == Type::String; }
+        [[nodiscard]] bool is_array()const noexcept { return _type == Type::Array; }
+        [[nodiscard]] bool is_object()const noexcept { return _type == Type::Object; }
 
         [[nodiscard]] double get_number() const {
             if (_type != Type::Number)
@@ -254,25 +330,25 @@ namespace json {
         [[nodiscard]] const std::vector<value>& get_array() const {
             if (_type != Type::Array)
                 throw std::runtime_error{ "The value isn't an array." };
-            return *static_cast<std::vector<value>*>(_arr);
+            return *static_cast<std::vector<value> *>(_arr);
         }
 
         [[nodiscard]] std::vector<value>& get_array() {
             if (_type != Type::Array)
                 throw std::runtime_error{ "The value isn't an array." };
-            return *static_cast<std::vector<value>*>(_arr);
+            return *static_cast<std::vector<value> *>(_arr);
         }
 
         [[nodiscard]] const std::unordered_map<std::string, value>& get_object() const {
             if (_type != Type::Object)
                 throw std::runtime_error{ "The value isn't an object." };
-            return *static_cast<std::unordered_map<std::string, value>*>(_obj);
+            return *static_cast<std::unordered_map<std::string, value> *>(_obj);
         }
 
         [[nodiscard]] std::unordered_map<std::string, value>& get_object() {
             if (_type != Type::Object)
                 throw std::runtime_error{ "The value isn't an object." };
-            return *static_cast<std::unordered_map<std::string, value>*>(_obj);
+            return *static_cast<std::unordered_map<std::string, value> *>(_obj);
         }
 
 
@@ -288,16 +364,17 @@ namespace json {
                 case Type::False:
                 case Type::Null:
                 case Type::Nothing:
-                    return;
+                    break;
                 case Type::String:
                     delete static_cast<std::string*>(_str);
-                    return;
+                    break;
                 case Type::Array:
                     delete static_cast<std::vector<value>*>(_arr);
-                    return;
+                    break;
                 case Type::Object:
                     delete static_cast<std::unordered_map<std::string, value>*>(_obj);
             }
+            _type = Type::Nothing;
         }
 
         private:
@@ -325,10 +402,10 @@ namespace json {
                 case value::Type::Nothing:
                     return true;
                 case value::Type::Array:
-                    return *(static_cast<std::vector<value>*>(x._arr)) == *(static_cast<std::vector<value>*>(y._arr));
+                    return *(static_cast<std::vector<value> *>(x._arr)) == *(static_cast<std::vector<value> *>(y._arr));
                 case value::Type::Object:
-                    return *(static_cast<std::unordered_map<std::string, value>*>(x._obj)) ==
-                        *(static_cast<std::unordered_map<std::string, value>*>(y._obj));
+                    return *(static_cast<std::unordered_map<std::string, value> *>(x._obj)) ==
+                        *(static_cast<std::unordered_map<std::string, value> *>(y._obj));
             }
         }
         return false;
@@ -1221,6 +1298,7 @@ namespace json {
                                 return result::normal;
                             }
                     }
+                    return result::error;
                 }
 
                 char state = 0;
@@ -1329,7 +1407,6 @@ namespace json {
             std::string _buffer;
         };
     }
-
 
 
     json::object parse(const char* first, const char* last) {
