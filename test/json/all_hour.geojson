@@ -1,0 +1,261 @@
+{
+    "type": "FeatureCollection",
+    "metadata": {
+        "generated": 1692945900000,
+        "url": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson",
+        "title": "USGS All Earthquakes, Past Hour",
+        "status": 200,
+        "api": "1.10.3",
+        "count": 6
+    },
+    "features": [
+        {
+            "type": "Feature",
+            "properties": {
+                "mag": 1,
+                "place": "34 km ENE of Susitna North, Alaska",
+                "time": 1692945542114,
+                "updated": 1692945659742,
+                "tz": null,
+                "url": "https://earthquake.usgs.gov/earthquakes/eventpage/ak023aw267r7",
+                "detail": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/detail/ak023aw267r7.geojson",
+                "felt": null,
+                "cdi": null,
+                "mmi": null,
+                "alert": null,
+                "status": "automatic",
+                "tsunami": 0,
+                "sig": 15,
+                "net": "ak",
+                "code": "023aw267r7",
+                "ids": ",ak023aw267r7,",
+                "sources": ",ak,",
+                "types": ",origin,phase-data,",
+                "nst": null,
+                "dmin": null,
+                "rms": 0.52,
+                "gap": null,
+                "magType": "ml",
+                "type": "earthquake",
+                "title": "M 1.0 - 34 km ENE of Susitna North, Alaska"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    -149.2265,
+                    62.2761,
+                    51.9
+                ]
+            },
+            "id": "ak023aw267r7"
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "mag": 1.91999996,
+                "place": "4 km S of Pāhala, Hawaii",
+                "time": 1692944186330,
+                "updated": 1692944374080,
+                "tz": null,
+                "url": "https://earthquake.usgs.gov/earthquakes/eventpage/hv73543337",
+                "detail": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/detail/hv73543337.geojson",
+                "felt": null,
+                "cdi": null,
+                "mmi": null,
+                "alert": null,
+                "status": "automatic",
+                "tsunami": 0,
+                "sig": 57,
+                "net": "hv",
+                "code": "73543337",
+                "ids": ",hv73543337,",
+                "sources": ",hv,",
+                "types": ",origin,phase-data,",
+                "nst": 32,
+                "dmin": null,
+                "rms": 0.109999999,
+                "gap": 165,
+                "magType": "md",
+                "type": "earthquake",
+                "title": "M 1.9 - 4 km S of Pāhala, Hawaii"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    -155.470993041992,
+                    19.1646671295166,
+                    32.3800010681152
+                ]
+            },
+            "id": "hv73543337"
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "mag": 1.92999995,
+                "place": "25 km SSE of Naalehu, Hawaii",
+                "time": 1692943468930,
+                "updated": 1692943673800,
+                "tz": null,
+                "url": "https://earthquake.usgs.gov/earthquakes/eventpage/hv73543327",
+                "detail": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/detail/hv73543327.geojson",
+                "felt": null,
+                "cdi": null,
+                "mmi": null,
+                "alert": null,
+                "status": "automatic",
+                "tsunami": 0,
+                "sig": 57,
+                "net": "hv",
+                "code": "73543327",
+                "ids": ",hv73543327,",
+                "sources": ",hv,",
+                "types": ",origin,phase-data,",
+                "nst": 33,
+                "dmin": null,
+                "rms": 0.200000003,
+                "gap": 278,
+                "magType": "md",
+                "type": "earthquake",
+                "title": "M 1.9 - 25 km SSE of Naalehu, Hawaii"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    -155.510833740234,
+                    18.8444995880127,
+                    16.5400009155273
+                ]
+            },
+            "id": "hv73543327"
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "mag": 2.1099999,
+                "place": "4 km S of Pāhala, Hawaii",
+                "time": 1692942925760,
+                "updated": 1692943113750,
+                "tz": null,
+                "url": "https://earthquake.usgs.gov/earthquakes/eventpage/hv73543317",
+                "detail": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/detail/hv73543317.geojson",
+                "felt": null,
+                "cdi": null,
+                "mmi": null,
+                "alert": null,
+                "status": "automatic",
+                "tsunami": 0,
+                "sig": 68,
+                "net": "hv",
+                "code": "73543317",
+                "ids": ",hv73543317,",
+                "sources": ",hv,",
+                "types": ",origin,phase-data,",
+                "nst": 30,
+                "dmin": null,
+                "rms": 0.109999999,
+                "gap": 113,
+                "magType": "md",
+                "type": "earthquake",
+                "title": "M 2.1 - 4 km S of Pāhala, Hawaii"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    -155.483505249023,
+                    19.1634998321533,
+                    34.810001373291
+                ]
+            },
+            "id": "hv73543317"
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "mag": 1.3,
+                "place": "15 km NNE of Altadena, CA",
+                "time": 1692942541430,
+                "updated": 1692942755731,
+                "tz": null,
+                "url": "https://earthquake.usgs.gov/earthquakes/eventpage/ci39650290",
+                "detail": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/detail/ci39650290.geojson",
+                "felt": null,
+                "cdi": null,
+                "mmi": null,
+                "alert": null,
+                "status": "automatic",
+                "tsunami": 0,
+                "sig": 26,
+                "net": "ci",
+                "code": "39650290",
+                "ids": ",ci39650290,",
+                "sources": ",ci,",
+                "types": ",nearby-cities,origin,phase-data,scitech-link,",
+                "nst": 10,
+                "dmin": 0.1639,
+                "rms": 0.13,
+                "gap": 127,
+                "magType": "ml",
+                "type": "earthquake",
+                "title": "M 1.3 - 15 km NNE of Altadena, CA"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    -118.0576667,
+                    34.3081667,
+                    24.05
+                ]
+            },
+            "id": "ci39650290"
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "mag": 2.24,
+                "place": "0 km E of Magas Arriba, Puerto Rico",
+                "time": 1692942461200,
+                "updated": 1692943185290,
+                "tz": null,
+                "url": "https://earthquake.usgs.gov/earthquakes/eventpage/pr71422098",
+                "detail": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/detail/pr71422098.geojson",
+                "felt": null,
+                "cdi": null,
+                "mmi": null,
+                "alert": null,
+                "status": "reviewed",
+                "tsunami": 0,
+                "sig": 77,
+                "net": "pr",
+                "code": "71422098",
+                "ids": ",pr71422098,",
+                "sources": ",pr,",
+                "types": ",origin,phase-data,",
+                "nst": 10,
+                "dmin": 0.0304,
+                "rms": 0.23,
+                "gap": 172,
+                "magType": "md",
+                "type": "earthquake",
+                "title": "M 2.2 - 0 km E of Magas Arriba, Puerto Rico"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    -66.7598333333333,
+                    18.0161666666667,
+                    13.33
+                ]
+            },
+            "id": "pr71422098"
+        }
+    ],
+    "bbox": [
+        -155.51083374023,
+        18.016166666667,
+        13.33,
+        -66.759833333333,
+        62.2761,
+        51.9
+    ]
+}

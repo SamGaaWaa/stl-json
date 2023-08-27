@@ -1,1470 +1,2403 @@
-#ifndef __JSON_H__
-#define __JSON_H__
+#pragma once
 
-#include <string>
-#include <vector>
-#include <unordered_map>
-#include <stdexcept>
-#include <cstdlib>
-#include <cstdio>
-#include <new>
+#include <utility>
+#include <concepts>
+#include <optional>
+#include <string_view>
 #include <cstring>
+#include <bit>
+#include <cctype>
+#include <cstring>
+#include <iostream>
+#include <format>
+#include <cstdint>
+#include <variant>
+#include <any>
+#include <vector>
+#include <map>
+#include <algorithm>
+#include <charconv>
+#include <string_view>
+#include <cassert>
+#include <expected>
+#include <stdio.h>
+#include <functional>
+#include <memory>
 
 namespace json {
-    struct value {
-        enum struct Type {
-            Number,
-            String,
-            Null,
-            False,
-            True,
-            Array,
-            Object,
-            Nothing
+
+    enum struct parse_error_t : uint8_t {
+        error,
+        happy_ending,
+        unknown_string_character,
+        unknown_space,
+        unknown_ESC,
+        unknown_hex_character,
+        unknown_utf8_bytes,
+        unknown_number_character,
+        unknown_boolean_character,
+        unknown_null_character,
+
+        early_EOF,
+        read_file_error,
+        extra_content
+    };
+
+    enum struct serialize_error_t : uint8_t {
+        error,
+        unknown_utf8_bytes
+    };
+
+    constexpr const char* error_string(const parse_error_t err)noexcept {
+        switch (err) {
+            case parse_error_t::error:
+                return "Error.";
+            case parse_error_t::happy_ending:
+                return "Happy ending.";
+            case parse_error_t::unknown_string_character:
+                return "Unknown string character.";
+            case parse_error_t::unknown_space:
+                return "Unknown space character.";
+            case parse_error_t::unknown_ESC:
+                return "Unknown ESC.";
+            case parse_error_t::unknown_hex_character:
+                return "Unknown hex character.";
+            case parse_error_t::unknown_utf8_bytes:
+                return "Unknown utf8 bytes.";
+            case parse_error_t::unknown_number_character:
+                return "Unknown number character.";
+            case parse_error_t::unknown_boolean_character:
+                return "Unknown boolean character.";
+            case parse_error_t::unknown_null_character:
+                return "Unknown null character.";
+            case parse_error_t::early_EOF:
+                return "Early EOF.";
+            case parse_error_t::read_file_error:
+                return "Read file error.";
+            case parse_error_t::extra_content:
+                return "Extra content.";
+            default:
+                std::unreachable();
+        }
+        std::unreachable();
+    }
+
+    const char* error_string(const serialize_error_t err)noexcept {
+        switch (err) {
+            case serialize_error_t::error:
+                return "Error.";
+            case serialize_error_t::unknown_utf8_bytes:
+                return "Unknown utf8 bytes.";
+            default:
+                std::unreachable();
+        }
+        std::unreachable();
+    }
+
+    template<class P>
+    concept Parser = requires(P p, char c) {
+        { p.on_null() }->std::same_as<std::optional<parse_error_t>>;
+        { p.on_true() }->std::same_as<std::optional<parse_error_t>>;
+        { p.on_false() }->std::same_as<std::optional<parse_error_t>>;
+        { p.on_string(c) }->std::same_as<std::optional<parse_error_t>>;
+        { p.on_string_begin() }->std::same_as<std::optional<parse_error_t>>;
+        { p.on_string_end() }->std::same_as<std::optional<parse_error_t>>;
+        { p.on_comma() }->std::same_as<std::optional<parse_error_t>>;
+        { p.on_colon() }->std::same_as<std::optional<parse_error_t>>;
+        { p.on_number(c) }->std::same_as<std::optional<parse_error_t>>;
+        { p.on_number_begin(c) }->std::same_as<std::optional<parse_error_t>>;
+        { p.on_number_end() }->std::same_as<std::optional<parse_error_t>>;
+        { p.on_left_square_bracket() }->std::same_as<std::optional<parse_error_t>>;
+        { p.on_right_square_bracket() }->std::same_as<std::optional<parse_error_t>>;
+        { p.on_left_brace() }->std::same_as<std::optional<parse_error_t>>;
+        { p.on_right_brace() }->std::same_as<std::optional<parse_error_t>>;
+    };
+
+    template<class B>
+    concept Builder = requires(B b, std::string str, std::string num, bool bb) {
+        { b.on_document_begin() }->std::same_as<std::optional<parse_error_t>>;
+        { b.on_document_end() }->std::same_as<std::optional<parse_error_t>>;
+        { b.on_object_begin() }->std::same_as<std::optional<parse_error_t>>;
+        { b.on_object_end() }->std::same_as<std::optional<parse_error_t>>;
+        { b.on_array_begin() }->std::same_as<std::optional<parse_error_t>>;
+        { b.on_array_end() }->std::same_as<std::optional<parse_error_t>>;
+        { b.on_key(std::move(str)) }->std::same_as<std::optional<parse_error_t>>;
+        { b.on_string(std::move(str)) }->std::same_as<std::optional<parse_error_t>>;
+        { b.on_number(std::move(num)) }->std::same_as<std::optional<parse_error_t>>;
+        { b.on_bool(bb) }->std::same_as<std::optional<parse_error_t>>;
+        { b.on_null() }->std::same_as<std::optional<parse_error_t>>;
+        { b.get() };
+    };
+
+
+    namespace detail {
+        template<Parser P>
+        struct lexer {
+            explicit lexer(P* p)noexcept :_parser{ p } {}
+
+            std::optional<parse_error_t> operator()(const char* data, const size_t size)noexcept {
+                const char* iter = data;
+                const char* const end = iter + size;
+                std::optional<parse_error_t> err;
+                bytes = 0;
+
+                while (iter < end) {
+                    switch (_state) {
+                        case state_t::normal:
+                            {
+                                iter = skip_space(iter, end);
+                                if (iter == end) {
+                                    bytes += size;
+                                    return {};
+                                }
+                                const char c = *iter;
+                                switch (c) {
+                                    case '{':
+                                        err = _parser->on_left_brace();
+                                        if (err) {
+                                            bytes += iter - data + 1;
+                                            return err;
+                                        }
+                                        ++iter;
+                                        continue;
+                                    case '}':
+                                        err = _parser->on_right_brace();
+                                        if (err) {
+                                            bytes += iter - data + 1;
+                                            return err;
+                                        }
+                                        ++iter;
+                                        continue;
+                                    case '[':
+                                        err = _parser->on_left_square_bracket();
+                                        if (err) {
+                                            bytes += iter - data + 1;
+                                            return err;
+                                        }
+                                        ++iter;
+                                        continue;
+                                    case ']':
+                                        err = _parser->on_right_square_bracket();
+                                        if (err) {
+                                            bytes += iter - data + 1;
+                                            return err;
+                                        }
+                                        ++iter;
+                                        continue;
+                                    case 'f':
+                                        _state = state_t::f;
+                                        ++iter;
+                                        continue;
+                                    case 't':
+                                        _state = state_t::t;
+                                        ++iter;
+                                        continue;
+                                    case 'n':
+                                        _state = state_t::n;
+                                        ++iter;
+                                        continue;
+                                    case '-':
+                                        err = _parser->on_number_begin(c);
+                                        if (err) {
+                                            bytes += iter - data + 1;
+                                            return err;
+                                        }
+                                        _state = state_t::after_optional_negative;
+                                        ++iter;
+                                        continue;
+                                    case '0':
+                                        err = _parser->on_number_begin(c);
+                                        if (err) {
+                                            bytes += iter - data + 1;
+                                            return err;
+                                        }
+                                        _state = state_t::after_zero;
+                                        ++iter;
+                                        continue;
+                                    case '1':
+                                    case '2':
+                                    case '3':
+                                    case '4':
+                                    case '5':
+                                    case '6':
+                                    case '7':
+                                    case '8':
+                                    case '9':
+                                        err = _parser->on_number_begin(c);
+                                        if (err) {
+                                            bytes += iter - data + 1;
+                                            return err;
+                                        }
+                                        _state = state_t::after_one_to_nine;
+                                        ++iter;
+                                        continue;
+                                    case '\"':
+                                        err = _parser->on_string_begin();
+                                        if (err) {
+                                            bytes += iter - data + 1;
+                                            return err;
+                                        }
+                                        _state = state_t::after_quotation_mark;
+                                        ++iter;
+                                        continue;
+                                    case ':':
+                                        err = _parser->on_colon();
+                                        if (err) {
+                                            bytes += iter - data + 1;
+                                            return err;
+                                        }
+                                        ++iter;
+                                        continue;
+                                    case ',':
+                                        err = _parser->on_comma();
+                                        if (err) {
+                                            bytes += iter - data + 1;
+                                            return err;
+                                        }
+                                        ++iter;
+                                        continue;
+                                    default:
+                                        {
+                                            bytes += iter - data + 1;
+                                            return parse_error_t::unknown_space;
+                                        }
+                                }
+                            }
+
+                            // string
+                        case state_t::after_quotation_mark:
+                            {
+                                const char c = *iter;
+                                switch (std::countl_one((uint8_t)c)) {
+                                    case 0:
+                                        {   //ASCII
+                                            if (std::iscntrl(c))
+                                                return parse_error_t{};
+                                            switch (c) {
+                                                case '\"':
+                                                    err = _parser->on_string_end();
+                                                    if (err) {
+                                                        bytes += iter - data + 1;
+                                                        return err;
+                                                    }
+                                                    _state = state_t::normal;
+                                                    ++iter;
+                                                    continue;
+                                                case '\\':
+                                                    _state = state_t::after_reverse_solidus;
+                                                    ++iter;
+                                                    continue;
+                                                default:
+                                                    _parser->on_string(c);
+                                                    ++iter;
+                                                    continue;
+                                            }
+                                        }
+                                    case 1:
+                                        return parse_error_t::unknown_string_character;
+                                    case 2:
+                                        _parser->on_string(c);
+                                        _state = state_t::wait_1_utf8_bytes;
+                                        ++iter;
+                                        continue;
+                                    case 3:
+                                        _parser->on_string(c);
+                                        _state = state_t::wait_2_utf8_bytes;
+                                        ++iter;
+                                        continue;
+                                    case 4:
+                                        _parser->on_string(c);
+                                        _state = state_t::wait_3_utf8_bytes;
+                                        ++iter;
+                                        continue;
+                                    default:
+                                        bytes += iter - data + 1;
+                                        return parse_error_t::unknown_string_character;
+                                }
+                            }
+                        case state_t::after_reverse_solidus:
+                            {
+                                const char c = *iter;
+                                switch (c) {
+                                    case '\"':
+                                    case '\\':
+                                    case '/':
+                                        _parser->on_string(c);
+                                        _state = state_t::after_quotation_mark;
+                                        ++iter;
+                                        continue;
+                                    case 'b':
+                                        _parser->on_string('\b');
+                                        _state = state_t::after_quotation_mark;
+                                        ++iter;
+                                        continue;
+                                    case 'f':
+                                        _parser->on_string('\f');
+                                        _state = state_t::after_quotation_mark;
+                                        ++iter;
+                                        continue;
+                                    case 'n':
+                                        _parser->on_string('\n');
+                                        _state = state_t::after_quotation_mark;
+                                        ++iter;
+                                        continue;
+                                    case 'r':
+                                        _parser->on_string('\r');
+                                        _state = state_t::after_quotation_mark;
+                                        ++iter;
+                                        continue;
+                                    case 't':
+                                        _parser->on_string('\t');
+                                        _state = state_t::after_quotation_mark;
+                                        ++iter;
+                                        continue;
+                                    case 'u':
+                                        _state = state_t::wait_4_hex;
+                                        ++iter;
+                                        continue;
+                                    default:
+                                        bytes += iter - data + 1;
+                                        return parse_error_t::unknown_ESC;
+                                }
+                            }
+                        case state_t::wait_4_hex:
+                            {
+                                const char c = *iter;
+                                if (auto op = hex_to_int(c); op) {
+                                    unicode_high |= ((*op) << 12);
+                                    _state = state_t::wait_3_hex;
+                                    ++iter;
+                                    continue;
+                                }
+                                else {
+                                    bytes += iter - data + 1;
+                                    return parse_error_t::unknown_hex_character;
+                                }
+                            }
+                        case state_t::wait_3_hex:
+                            {
+                                const char c = *iter;
+                                if (auto op = hex_to_int(c); op) {
+                                    unicode_high |= ((*op) << 8);
+                                    _state = state_t::wait_2_hex;
+                                    ++iter;
+                                    continue;
+                                }
+                                else {
+                                    bytes += iter - data + 1;
+                                    return parse_error_t::unknown_hex_character;
+                                }
+                            }
+                        case state_t::wait_2_hex:
+                            {
+                                const char c = *iter;
+                                if (auto op = hex_to_int(c); op) {
+                                    unicode_high |= ((*op) << 4);
+                                    _state = state_t::wait_1_hex;
+                                    ++iter;
+                                    continue;
+                                }
+                                else {
+                                    bytes += iter - data + 1;
+                                    return parse_error_t::unknown_hex_character;
+                                }
+                            }
+                        case state_t::wait_1_hex:
+                            {
+                                const char c = *iter;
+                                if (auto op = hex_to_int(c); op) {
+                                    unicode_high |= *op;
+                                    if (unicode_high >= 0xD800 && unicode_high <= 0xDBFF) {
+                                        _state = state_t::wait_low_reverse_solidus;
+                                        ++iter;
+                                        continue;
+                                    }
+                                    const auto utf8 = unicode_to_utf8(unicode_high);
+                                    for (const auto c : utf8)
+                                        _parser->on_string(c);
+                                    _state = state_t::after_quotation_mark;
+                                    ++iter;
+                                    continue;
+                                }
+                                else {
+                                    bytes += iter - data + 1;
+                                    return parse_error_t::unknown_hex_character;
+                                }
+                            }
+                        case state_t::wait_low_reverse_solidus:
+                            {
+                                const char c = *iter;
+                                if (c == '\\') {
+                                    _state = state_t::wait_low_u;
+                                    ++iter;
+                                    continue;
+                                }
+                                else {
+                                    bytes += iter - data + 1;
+                                    return parse_error_t::unknown_hex_character;
+                                }
+                            }
+                        case state_t::wait_low_u:
+                            {
+                                const char c = *iter;
+                                if (c == 'u') {
+                                    _state = state_t::wait_low_4_hex;
+                                    ++iter;
+                                    continue;
+                                }
+                                else {
+                                    bytes += iter - data + 1;
+                                    return parse_error_t::unknown_hex_character;
+                                }
+                            }
+                        case state_t::wait_low_4_hex:
+                            {
+                                const char c = *iter;
+                                if (auto op = hex_to_int(c); op) {
+                                    unicode_low |= ((*op) << 12);
+                                    _state = state_t::wait_low_3_hex;
+                                    ++iter;
+                                    continue;
+                                }
+                                else {
+                                    bytes += iter - data + 1;
+                                    return parse_error_t::unknown_hex_character;
+                                }
+                            }
+                        case state_t::wait_low_3_hex:
+                            {
+                                const char c = *iter;
+                                if (auto op = hex_to_int(c); op) {
+                                    unicode_low |= ((*op) << 8);
+                                    _state = state_t::wait_low_2_hex;
+                                    ++iter;
+                                    continue;
+                                }
+                                else {
+                                    bytes += iter - data + 1;
+                                    return parse_error_t::unknown_hex_character;
+                                }
+                            }
+                        case state_t::wait_low_2_hex:
+                            {
+                                const char c = *iter;
+                                if (auto op = hex_to_int(c); op) {
+                                    unicode_low |= ((*op) << 4);
+                                    _state = state_t::wait_low_1_hex;
+                                    ++iter;
+                                    continue;
+                                }
+                                else {
+                                    bytes += iter - data + 1;
+                                    return parse_error_t::unknown_hex_character;
+                                }
+                            }
+                        case state_t::wait_low_1_hex:
+                            {
+                                const char c = *iter;
+                                if (auto op = hex_to_int(c); op) {
+                                    unicode_low |= *op;
+                                    const uint32_t uc = 0x10000 + ((unicode_high - 0xD800) << 10) + (unicode_low - 0xDC00);
+                                    const auto utf8 = unicode_to_utf8(uc);
+                                    for (const auto c : utf8)
+                                        _parser->on_string(c);
+                                    unicode_high = unicode_low = 0;
+                                    _state = state_t::after_quotation_mark;
+                                    ++iter;
+                                    continue;
+                                }
+                                else {
+                                    bytes += iter - data + 1;
+                                    return parse_error_t::unknown_hex_character;
+                                }
+                            }
+                        case state_t::wait_3_utf8_bytes:
+                            if (std::countl_one((uint8_t)*iter) != 1) {
+                                bytes += iter - data + 1;
+                                return parse_error_t::unknown_utf8_bytes;
+                            }
+                            _parser->on_string(*iter);
+                            _state = state_t::wait_2_utf8_bytes;
+                            ++iter;
+                            continue;
+                        case state_t::wait_2_utf8_bytes:
+                            if (std::countl_one((uint8_t)*iter) != 1) {
+                                bytes += iter - data + 1;
+                                return parse_error_t::unknown_utf8_bytes;
+                            }
+                            _parser->on_string(*iter);
+                            _state = state_t::wait_1_utf8_bytes;
+                            ++iter;
+                            continue;
+                        case state_t::wait_1_utf8_bytes:
+                            if (std::countl_one((uint8_t)*iter) != 1) {
+                                bytes += iter - data + 1;
+                                return parse_error_t::unknown_utf8_bytes;
+                            }
+                            _parser->on_string(*iter);
+                            _state = state_t::after_quotation_mark;
+                            ++iter;
+                            continue;
+
+                            // number
+                        case state_t::after_optional_negative:
+                            {
+                                const char c = *iter;
+                                switch (c) {
+                                    case '0':
+                                        _parser->on_number(c);
+                                        _state = state_t::after_zero;
+                                        ++iter;
+                                        continue;
+                                    case '1':
+                                    case '2':
+                                    case '3':
+                                    case '4':
+                                    case '5':
+                                    case '6':
+                                    case '7':
+                                    case '8':
+                                    case '9':
+                                        _parser->on_number(c);
+                                        _state = state_t::after_one_to_nine;
+                                        ++iter;
+                                        continue;
+                                    default:
+                                        bytes += iter - data + 1;
+                                        return parse_error_t::unknown_number_character;
+                                }
+                            }
+                        case state_t::after_point:
+                            {
+                                const char c = *iter;
+                                switch (c) {
+                                    case '0':
+                                    case '1':
+                                    case '2':
+                                    case '3':
+                                    case '4':
+                                    case '5':
+                                    case '6':
+                                    case '7':
+                                    case '8':
+                                    case '9':
+                                        _parser->on_number(c);
+                                        _state = state_t::fractional_part;
+                                        ++iter;
+                                        continue;
+                                    default:
+                                        bytes += iter - data + 1;
+                                        return parse_error_t::unknown_number_character;
+                                }
+                            }
+                        case state_t::after_e:
+                            {
+                                const char c = *iter;
+                                switch (c) {
+                                    case '0':
+                                    case '1':
+                                    case '2':
+                                    case '3':
+                                    case '4':
+                                    case '5':
+                                    case '6':
+                                    case '7':
+                                    case '8':
+                                    case '9':
+                                        _parser->on_number(c);
+                                        _state = state_t::parsing_exponent;
+                                        ++iter;
+                                        continue;
+                                    case '+':
+                                    case '-':
+                                        _parser->on_number(c);
+                                        _state = state_t::after_exponent_sign;
+                                        ++iter;
+                                        continue;
+                                    default:
+                                        bytes += iter - data + 1;
+                                        return parse_error_t::unknown_number_character;
+                                }
+                            }
+                        case state_t::after_exponent_sign:
+                            {
+                                const char c = *iter;
+                                switch (c) {
+                                    case '0':
+                                    case '1':
+                                    case '2':
+                                    case '3':
+                                    case '4':
+                                    case '5':
+                                    case '6':
+                                    case '7':
+                                    case '8':
+                                    case '9':
+                                        _parser->on_number(c);
+                                        _state = state_t::parsing_exponent;
+                                        ++iter;
+                                        continue;
+                                    default:
+                                        bytes += iter - data + 1;
+                                        return parse_error_t::unknown_number_character;
+                                }
+                            }
+
+                            // number acceptable state
+                        case state_t::after_zero:
+                            {
+                                const char c = *iter;
+                                switch (c) {
+                                    case '.':
+                                        _parser->on_number(c);
+                                        _state = state_t::after_point;
+                                        ++iter;
+                                        continue;
+                                    case 'e':
+                                    case 'E':
+                                        _parser->on_number(c);
+                                        _state = state_t::after_e;
+                                        ++iter;
+                                        continue;
+                                    default:
+                                        err = _parser->on_number_end();
+                                        if (err) {
+                                            bytes += iter - data + 1;
+                                            return err;
+                                        }
+                                        _state = state_t::normal;
+                                        continue;
+                                }
+                            }
+                        case state_t::after_one_to_nine:
+                            {
+                                const char c = *iter;
+                                switch (c) {
+                                    case '0':
+                                    case '1':
+                                    case '2':
+                                    case '3':
+                                    case '4':
+                                    case '5':
+                                    case '6':
+                                    case '7':
+                                    case '8':
+                                    case '9':
+                                        _parser->on_number(c);
+                                        _state = state_t::parsing_digital;
+                                        ++iter;
+                                        continue;
+                                    case '.':
+                                        _parser->on_number(c);
+                                        _state = state_t::after_point;
+                                        ++iter;
+                                        continue;
+                                    case 'e':
+                                    case 'E':
+                                        _parser->on_number(c);
+                                        _state = state_t::after_e;
+                                        ++iter;
+                                        continue;
+                                    default:
+                                        err = _parser->on_number_end();
+                                        if (err) {
+                                            bytes += iter - data + 1;
+                                            return err;
+                                        }
+                                        _state = state_t::normal;
+                                        continue;
+                                }
+                            }
+                        case state_t::parsing_digital:
+                            {
+                                const char c = *iter;
+                                switch (c) {
+                                    case '.':
+                                        _parser->on_number(c);
+                                        _state = state_t::after_point;
+                                        ++iter;
+                                        continue;
+                                    case 'e':
+                                    case 'E':
+                                        _parser->on_number(c);
+                                        _state = state_t::after_e;
+                                        ++iter;
+                                        continue;
+                                    case '0':
+                                    case '1':
+                                    case '2':
+                                    case '3':
+                                    case '4':
+                                    case '5':
+                                    case '6':
+                                    case '7':
+                                    case '8':
+                                    case '9':
+                                        _parser->on_number(c);
+                                        ++iter;
+                                        continue;
+                                    default:
+                                        err = _parser->on_number_end();
+                                        if (err) {
+                                            bytes += iter - data + 1;
+                                            return err;
+                                        }
+                                        _state = state_t::normal;
+                                        continue;
+                                }
+                            }
+                        case state_t::parsing_exponent:
+                            {
+                                const char c = *iter;
+                                switch (c) {
+                                    case '0':
+                                    case '1':
+                                    case '2':
+                                    case '3':
+                                    case '4':
+                                    case '5':
+                                    case '6':
+                                    case '7':
+                                    case '8':
+                                    case '9':
+                                        _parser->on_number(c);
+                                        ++iter;
+                                        continue;
+                                    default:
+                                        err = _parser->on_number_end();
+                                        if (err) {
+                                            bytes += iter - data + 1;
+                                            return err;
+                                        }
+                                        _state = state_t::normal;
+                                        continue;
+                                }
+                            }
+                        case state_t::fractional_part:
+                            {
+                                const char c = *iter;
+                                switch (c) {
+                                    case '0':
+                                    case '1':
+                                    case '2':
+                                    case '3':
+                                    case '4':
+                                    case '5':
+                                    case '6':
+                                    case '7':
+                                    case '8':
+                                    case '9':
+                                        _parser->on_number(c);
+                                        ++iter;
+                                        continue;
+                                    case 'e':
+                                    case 'E':
+                                        _parser->on_number(c);
+                                        _state = state_t::after_e;
+                                        ++iter;
+                                        continue;
+                                    default:
+                                        err = _parser->on_number_end();
+                                        if (err) {
+                                            bytes += iter - data + 1;
+                                            return err;
+                                        }
+                                        _state = state_t::normal;
+                                        continue;
+                                }
+                            }
+
+                            // false
+                        case state_t::f:
+                            {
+                                if (*iter == 'a') {
+                                    _state = state_t::fa;
+                                    ++iter;
+                                    continue;
+                                }
+                                else {
+                                    bytes += iter - data + 1;
+                                    return parse_error_t::unknown_boolean_character;
+                                }
+                            }
+                        case state_t::fa:
+                            {
+                                if (*iter == 'l') {
+                                    _state = state_t::fal;
+                                    ++iter;
+                                    continue;
+                                }
+                                else {
+                                    bytes += iter - data + 1;
+                                    return parse_error_t::unknown_boolean_character;
+                                }
+                            }
+                        case state_t::fal:
+                            {
+                                if (*iter == 's') {
+                                    _state = state_t::fals;
+                                    ++iter;
+                                    continue;
+                                }
+                                else {
+                                    bytes += iter - data + 1;
+                                    return parse_error_t::unknown_boolean_character;
+                                }
+                            }
+                        case state_t::fals:
+                            {
+                                if (*iter == 'e') {
+                                    err = _parser->on_false();
+                                    if (err) {
+                                        bytes += iter - data + 1;
+                                        return err;
+                                    }
+                                    _state = state_t::normal;
+                                    ++iter;
+                                    continue;
+                                }
+                                else {
+                                    bytes += iter - data + 1;
+                                    return parse_error_t::unknown_boolean_character;
+                                }
+                            }
+
+                            //true
+                        case state_t::t:
+                            {
+                                if (*iter == 'r') {
+                                    _state = state_t::tr;
+                                    ++iter;
+                                    continue;
+                                }
+                                else {
+                                    bytes += iter - data + 1;
+                                    return parse_error_t::unknown_boolean_character;
+                                }
+                            }
+                        case state_t::tr:
+                            {
+                                if (*iter == 'u') {
+                                    _state = state_t::tru;
+                                    ++iter;
+                                    continue;
+                                }
+                                else {
+                                    bytes += iter - data + 1;
+                                    return parse_error_t::unknown_boolean_character;
+                                }
+                            }
+                        case state_t::tru:
+                            {
+                                if (*iter == 'e') {
+                                    err = _parser->on_true();
+                                    if (err) {
+                                        bytes += iter - data + 1;
+                                        return err;
+                                    }
+                                    _state = state_t::normal;
+                                    ++iter;
+                                    continue;
+                                }
+                                else {
+                                    bytes += iter - data + 1;
+                                    return parse_error_t::unknown_boolean_character;
+                                }
+                            }
+
+                            //null
+                        case state_t::n:
+                            {
+                                if (*iter == 'u') {
+                                    _state = state_t::nu;
+                                    ++iter;
+                                    continue;
+                                }
+                                else {
+                                    bytes += iter - data + 1;
+                                    return parse_error_t::unknown_null_character;
+                                }
+                            }
+                        case state_t::nu:
+                            {
+                                if (*iter == 'l') {
+                                    _state = state_t::nul;
+                                    ++iter;
+                                    continue;
+                                }
+                                else {
+                                    bytes += iter - data + 1;
+                                    return parse_error_t::unknown_null_character;
+                                }
+                            }
+                        case state_t::nul:
+                            {
+                                if (*iter == 'l') {
+                                    err = _parser->on_null();
+                                    if (err) {
+                                        bytes += iter - data + 1;
+                                        return err;
+                                    }
+                                    _state = state_t::normal;
+                                    ++iter;
+                                    continue;
+                                }
+                                else {
+                                    bytes += iter - data + 1;
+                                    return parse_error_t::unknown_null_character;
+                                }
+                            }
+                        default:
+                            std::unreachable();
+                    }
+                }
+                bytes += size;
+                return {};
+            }
+
+            static constexpr bool is_space(const char c)noexcept {
+                switch (c) {
+                    case ' ':
+                    case '\n':
+                    case '\t':
+                    case '\r':
+                        return true;
+                    default:
+                        return false;
+                }
+            }
+
+            static constexpr const char* skip_space(const char* iter, const char* const end)noexcept {
+                while (iter != end and is_space(*iter)) {
+                    ++iter;
+                }
+                return iter;
+            }
+
+            static constexpr std::optional<uint32_t> hex_to_int(const char c)noexcept {
+                switch (c) {
+                    case '0':
+                    case '1':
+                    case '2':
+                    case '3':
+                    case '4':
+                    case '5':
+                    case '6':
+                    case '7':
+                    case '8':
+                    case '9':
+                        return uint8_t((c - '0') * 16);
+                    case 'a':
+                    case 'b':
+                    case 'c':
+                    case 'd':
+                    case 'e':
+                    case 'f':
+                        return uint8_t((c - 'a' + 10) * 16);
+                    case 'A':
+                    case 'B':
+                    case 'C':
+                    case 'D':
+                    case 'E':
+                    case 'F':
+                        return uint8_t((c - 'A' + 10) * 16);
+                    default:
+                        return std::nullopt;
+                }
+            }
+
+            constexpr static std::string unicode_to_utf8(const uint32_t uc)noexcept {
+                std::string utf8;
+
+                if (uc <= 0x7F) {
+                    // 单字节 UTF-8 编码
+                    utf8 += static_cast<char>(uc);
+                }
+                else if (uc <= 0x7FF) {
+                    // 双字节 UTF-8 编码
+                    utf8 += static_cast<char>(0xC0 | (uc >> 6));
+                    utf8 += static_cast<char>(0x80 | (uc & 0x3F));
+                }
+                else if (uc <= 0xFFFF) {
+                    // 三字节 UTF-8 编码
+                    utf8 += static_cast<char>(0xE0 | (uc >> 12));
+                    utf8 += static_cast<char>(0x80 | ((uc >> 6) & 0x3F));
+                    utf8 += static_cast<char>(0x80 | (uc & 0x3F));
+                }
+                else if (uc <= 0x10FFFF) {
+                    // 四字节 UTF-8 编码
+                    utf8 += static_cast<char>(0xF0 | (uc >> 18));
+                    utf8 += static_cast<char>(0x80 | ((uc >> 12) & 0x3F));
+                    utf8 += static_cast<char>(0x80 | ((uc >> 6) & 0x3F));
+                    utf8 += static_cast<char>(0x80 | (uc & 0x3F));
+                }
+
+                return utf8;
+            }
+
+            P* _parser;
+            enum struct state_t {
+                normal,
+
+                // string
+                after_quotation_mark,
+                after_reverse_solidus,
+                wait_4_hex,
+                wait_3_hex,
+                wait_2_hex,
+                wait_1_hex,
+
+                wait_low_reverse_solidus,
+                wait_low_u,
+                wait_low_4_hex,
+                wait_low_3_hex,
+                wait_low_2_hex,
+                wait_low_1_hex,
+
+                wait_3_utf8_bytes,
+                wait_2_utf8_bytes,
+                wait_1_utf8_bytes,
+
+                // number
+                after_optional_negative,
+                after_zero,         //end
+                after_one_to_nine,  //end
+                after_point,
+                parsing_digital,    //end
+                after_e,
+                parsing_exponent,   //end
+                after_exponent_sign,
+                fractional_part,    //end
+
+                // false
+                f,
+                fa,
+                fal,
+                fals,
+
+                //true
+                t,
+                tr,
+                tru,
+
+                //null
+                n,
+                nu,
+                nul,
+
+                error
+            };
+            state_t _state = state_t::normal;
+            uint8_t _hex = 0;
+            size_t bytes = 0;
+            uint32_t unicode_high;
+            uint32_t unicode_low;
         };
 
-        [[nodiscard]] Type type() const noexcept { return _type; }
-
-        value() noexcept: _type{ Type::Nothing } {};
-
-        value(const value& other): _type{ other._type } {
-            switch (_type) {
-                case Type::Number:
-                    _num = other._num;
-                    break;
-                case Type::String:
-                    _str = ::new std::string(
-                        *static_cast<std::string*>(other._str)
-                    );
-                    break;
-                case Type::Null:
-                    break;
-                case Type::True:
-                case Type::False:
-                    _b = other._b;
-                    break;
-                case Type::Array:
-                    _arr = static_cast<void*>(::new std::vector<value>(
-                        *static_cast<std::vector<value> *>(other._arr)
-                        ));
-                    break;
-                case Type::Object:
-                    _obj = ::new std::unordered_map<std::string, value>(
-                        *static_cast<std::unordered_map<std::string, value> *>(other._obj)
-                        );
-                    break;
-                case Type::Nothing:
-                    break;
+        template<Builder B>
+        struct parser {
+            explicit parser(B* b) :builder{ b } {
+                _stack.emplace_back(json_parser{ {}, state_t{}, this });
             }
-        }
 
-
-        value(value&& other) noexcept: _type{ other._type } {
-            switch (_type) {
-                case Type::Number:
-                    _num = other._num;
-                    break;
-                case Type::String:
-                    _str = other._str;
-                    other._type = Type::Nothing;
-                    break;
-                case Type::Null:
-                    break;
-                case Type::True:
-                case Type::False:
-                    _b = other._b;
-                    break;
-                case Type::Array:
-                    _arr = other._arr;
-                    other._type = Type::Nothing;
-                    break;
-                case Type::Object:
-                    _obj = other._obj;
-                    other._type = Type::Nothing;
-                    break;
-                case Type::Nothing:
-                    break;
+            std::optional<parse_error_t> on_null()noexcept {
+                assert(!_stack.empty());
+                return std::visit([ ](auto& p) {
+                    return p.on_null();
+                    }, _stack.back());
             }
+
+            std::optional<parse_error_t> on_true()noexcept {
+                assert(!_stack.empty());
+                return std::visit([ ](auto& p) {
+                    return p.on_true();
+                    }, _stack.back());
+            }
+
+            std::optional<parse_error_t> on_false()noexcept {
+                assert(!_stack.empty());
+                return std::visit([ ](auto& p) {
+                    return p.on_false();
+                    }, _stack.back());
+            }
+
+            std::optional<parse_error_t> on_string(const char c)noexcept {
+                assert(!_stack.empty());
+                return std::visit([=](auto& p) {
+                    return p.on_string(c);
+                    }, _stack.back());
+            }
+
+            std::optional<parse_error_t> on_string_begin()noexcept {
+                assert(!_stack.empty());
+                return std::visit([ ](auto& p) {
+                    return p.on_string_begin();
+                    }, _stack.back());
+            }
+
+            std::optional<parse_error_t> on_string_end()noexcept {
+                assert(!_stack.empty());
+                return std::visit([ ](auto& p) {
+                    return p.on_string_end();
+                    }, _stack.back());
+            }
+
+            std::optional<parse_error_t> on_comma()noexcept {
+                assert(!_stack.empty());
+                return std::visit([ ](auto& p) {
+                    return p.on_comma();
+                    }, _stack.back());
+            }
+
+            std::optional<parse_error_t> on_colon()noexcept {
+                assert(!_stack.empty());
+                return std::visit([ ](auto& p) {
+                    return p.on_colon();
+                    }, _stack.back());
+            }
+
+            std::optional<parse_error_t> on_number(const char c)noexcept {
+                assert(!_stack.empty());
+                return std::visit([=](auto& p) {
+                    return p.on_number(c);
+                    }, _stack.back());
+            }
+
+            std::optional<parse_error_t> on_number_begin(const char c)noexcept {
+                assert(!_stack.empty());
+                return std::visit([=](auto& p) {
+                    return p.on_number_begin(c);
+                    }, _stack.back());
+            }
+
+            std::optional<parse_error_t> on_number_end()noexcept {
+                assert(!_stack.empty());
+                return std::visit([ ](auto& p) {
+                    return p.on_number_end();
+                    }, _stack.back());
+            }
+
+            std::optional<parse_error_t> on_left_square_bracket()noexcept {
+                assert(!_stack.empty());
+                return std::visit([ ](auto& p) {
+                    return p.on_left_square_bracket();
+                    }, _stack.back());
+            }
+
+            std::optional<parse_error_t> on_right_square_bracket()noexcept {
+                assert(!_stack.empty());
+                return std::visit([ ](auto& p) {
+                    return p.on_right_square_bracket();
+                    }, _stack.back());
+            }
+
+            std::optional<parse_error_t> on_left_brace()noexcept {
+                assert(!_stack.empty());
+                return std::visit([ ](auto& p) {
+                    return p.on_left_brace();
+                    }, _stack.back());
+            }
+
+            std::optional<parse_error_t> on_right_brace()noexcept {
+                assert(!_stack.empty());
+                return std::visit([ ](auto& p) {
+                    return p.on_right_brace();
+                    }, _stack.back());
+            }
+
+            B* builder;
+
+            private:
+            enum struct state_t {
+                start,
+
+                parsing_object,
+
+                parsing_A,
+                parsing_A_after_pair,
+                parsing_A_after_B,
+
+                parsing_B,
+                parsing_B_after_comma,
+                parsing_B_after_pair,
+
+                parsing_pair,
+                parsing_pair_after_string,
+                parsing_pair_after_colon,
+                parsing_pair_after_value,
+
+                parsing_array,
+                parsing_array_after_left_square_bracket,
+                parsing_array_after_C,
+
+                parsing_C,
+                parsing_C_after_elements,
+
+                parsing_elements,
+                parsing_elements_after_value,
+                parsing_elements_after_D,
+
+                parsing_D,
+                parsing_D_after_comma,
+                parsing_D_after_elements,
+
+                parsing_value,
+                parsing_value_after_object,
+                parsing_value_after_array,
+            };
+
+            struct parse_functor_base {
+                std::optional<parse_error_t> on_null()noexcept {
+                    return parse_error_t{};
+                }
+
+                std::optional<parse_error_t> on_true()noexcept {
+                    return parse_error_t{};
+                }
+
+                std::optional<parse_error_t> on_false()noexcept {
+                    return parse_error_t{};
+                }
+
+                std::optional<parse_error_t> on_string(const char c)noexcept {
+                    return parse_error_t{};
+                }
+
+                std::optional<parse_error_t> on_string_begin()noexcept {
+                    return parse_error_t{};
+                }
+
+                std::optional<parse_error_t> on_string_end()noexcept {
+                    return parse_error_t{};
+                }
+
+                std::optional<parse_error_t> on_comma()noexcept {
+                    return parse_error_t{};
+                }
+
+                std::optional<parse_error_t> on_colon()noexcept {
+                    return parse_error_t{};
+                }
+
+                std::optional<parse_error_t> on_number(const char c)noexcept {
+                    return parse_error_t{};
+                }
+
+                std::optional<parse_error_t> on_number_begin(const char c)noexcept {
+                    return parse_error_t{};
+                }
+
+                std::optional<parse_error_t> on_number_end()noexcept {
+                    return parse_error_t{};
+                }
+
+                std::optional<parse_error_t> on_left_square_bracket()noexcept {
+                    return parse_error_t{};
+                }
+
+                std::optional<parse_error_t> on_right_square_bracket()noexcept {
+                    return parse_error_t{};
+                }
+
+                std::optional<parse_error_t> on_left_brace()noexcept {
+                    return parse_error_t{};
+                }
+
+                std::optional<parse_error_t> on_right_brace()noexcept {
+                    return parse_error_t{};
+                }
+            };
+
+            struct json_parser : parse_functor_base {
+                std::optional<parse_error_t> on_left_brace()noexcept {
+                    auto p = parent;
+                    auto err = p->builder->on_document_begin();
+                    if (err)
+                        return err;
+                    p->_stack.back() = object_parser{ {}, state_t::parsing_object, p };
+                    return p->on_left_brace();
+                }
+
+                std::optional<parse_error_t> on_left_square_bracket()noexcept {
+                    auto p = parent;
+                    auto err = p->builder->on_document_begin();
+                    if (err)
+                        return err;
+                    p->_stack.back() = array_parser{ {}, state_t::parsing_array, p };
+                    return p->on_left_square_bracket();
+                }
+
+                state_t state;
+                parser* parent;
+            };
+
+            struct object_parser : parse_functor_base {
+                std::optional<parse_error_t> on_left_brace()noexcept {
+                    auto err = parent->builder->on_object_begin();
+                    auto p = parent;
+                    p->_stack.back() = A_parser{ {}, state_t::parsing_A, p };
+                    return err;
+                }
+
+                state_t state;
+                parser* parent;
+            };
+
+            struct A_parser : parse_functor_base {
+                std::optional<parse_error_t> on_right_brace()noexcept {
+                    if (state == state_t::parsing_A or state == state_t::parsing_A_after_B) {
+                        auto p = parent;
+                        auto err = p->builder->on_object_end();
+                        if (err)
+                            return err;
+                        p->_stack.pop_back();
+                        if (p->_stack.empty()) {
+                            p->builder->on_document_end();
+                            return parse_error_t::happy_ending;
+                        }
+                        return {};
+                    }
+                    return parse_error_t{};
+                }
+
+                std::optional<parse_error_t> on_string_begin()noexcept {
+                    if (state == state_t::parsing_A) {
+                        state = state_t::parsing_A_after_B;
+                        auto p = parent;
+                        p->_stack.emplace_back(B_parser{ {}, state_t::parsing_B, p });
+                        p->_stack.emplace_back(pair_parser{ {}, state_t::parsing_pair, p });
+                        return p->on_string_begin();
+                    }
+                    return parse_error_t{};
+                }
+
+                state_t state;
+                parser* parent;
+            };
+
+            struct B_parser : parse_functor_base {
+                std::optional<parse_error_t> on_right_brace()noexcept {
+                    if (state == state_t::parsing_B) {
+                        auto p = parent;
+                        p->_stack.pop_back();
+                        assert(!p->_stack.empty());
+                        return p->on_right_brace();
+                    }
+                    return parse_error_t{};
+                }
+
+                std::optional<parse_error_t> on_comma()noexcept {
+                    auto p = parent;
+                    p->_stack.emplace_back(pair_parser{ {}, state_t::parsing_pair,p });
+                    return {};
+                }
+
+                state_t state;
+                parser* parent;
+            };
+
+            struct pair_parser : parse_functor_base {
+                std::optional<parse_error_t> on_string_begin()noexcept {
+                    if (state == state_t::parsing_pair) {
+                        return {};
+                    }
+                    return parse_error_t{};
+                }
+
+                std::optional<parse_error_t> on_string(const char c)noexcept {
+                    key.push_back(c);
+                    return {};
+                }
+
+                std::optional<parse_error_t> on_string_end()noexcept {
+                    std::string str;
+                    str.swap(key);
+                    state = state_t::parsing_pair_after_string;
+                    return parent->builder->on_key(std::move(str));
+                }
+
+                std::optional<parse_error_t> on_colon()noexcept {
+                    if (state == state_t::parsing_pair_after_string) {
+                        auto p = parent;
+                        p->_stack.back() = value_parser{ {}, state_t::parsing_value, p };
+                        return {};
+                    }
+                    return parse_error_t{};
+                }
+
+                state_t state;
+                parser* parent;
+                std::string key;
+            };
+
+            struct value_parser : parse_functor_base {
+                std::optional<parse_error_t> on_left_brace()noexcept {
+                    auto p = parent;
+                    p->_stack.back() = object_parser{ {}, state_t::parsing_object, p };
+                    return p->on_left_brace();
+                }
+
+                std::optional<parse_error_t> on_left_square_bracket()noexcept {
+                    auto p = parent;
+                    p->_stack.back() = array_parser{ {}, state_t::parsing_array, p };
+                    return p->on_left_square_bracket();
+                }
+
+                std::optional<parse_error_t> on_number(const char c)noexcept {
+                    str.push_back(c);
+                    return {};
+                }
+
+                std::optional<parse_error_t> on_number_begin(const char c)noexcept {
+                    str.push_back(c);
+                    return {};
+                }
+
+                std::optional<parse_error_t> on_number_end()noexcept {
+                    std::string num;
+                    str.swap(num);
+                    auto err = parent->builder->on_number(std::move(num));
+                    parent->_stack.pop_back();
+                    return err;
+                }
+
+                std::optional<parse_error_t> on_true()noexcept {
+                    auto err = parent->builder->on_bool(true);
+                    parent->_stack.pop_back();
+                    return err;
+                }
+
+                std::optional<parse_error_t> on_false()noexcept {
+                    auto err = parent->builder->on_bool(false);
+                    parent->_stack.pop_back();
+                    return err;
+                }
+
+                std::optional<parse_error_t> on_string(const char c)noexcept {
+                    str.push_back(c);
+                    return {};
+                }
+
+                std::optional<parse_error_t> on_string_begin()noexcept {
+                    return {};
+                }
+
+                std::optional<parse_error_t> on_string_end()noexcept {
+                    std::string s;
+                    s.swap(str);
+                    auto err = parent->builder->on_string(std::move(s));
+                    parent->_stack.pop_back();
+                    return err;
+                }
+
+                std::optional<parse_error_t> on_null()noexcept {
+                    auto err = parent->builder->on_null();
+                    parent->_stack.pop_back();
+                    return err;
+                }
+
+                state_t state;
+                parser* parent;
+                std::string str;
+            };
+
+            struct array_parser : parse_functor_base {
+                std::optional<parse_error_t> on_left_square_bracket()noexcept {
+                    auto p = parent;
+                    auto err = p->builder->on_array_begin();
+                    p->_stack.back() = C_parser{ {}, state_t::parsing_C, p };
+                    return err;
+                }
+
+                state_t state;
+                parser* parent;
+            };
+
+            struct C_parser : parse_functor_base {
+                std::optional<parse_error_t> on_null()noexcept {
+                    if (state == state_t::parsing_C) {
+                        auto p = parent;
+                        p->_stack.emplace_back(elements_parser{ {}, state_t::parsing_elements, p });
+                        return p->on_null();
+                    }
+                    return parse_error_t{};
+                }
+
+                std::optional<parse_error_t> on_true()noexcept {
+                    if (state == state_t::parsing_C) {
+                        auto p = parent;
+                        p->_stack.emplace_back(elements_parser{ {}, state_t::parsing_elements, p });
+                        return p->on_true();
+                    }
+                    return parse_error_t{};
+                }
+
+                std::optional<parse_error_t> on_false()noexcept {
+                    if (state == state_t::parsing_C) {
+                        auto p = parent;
+                        p->_stack.emplace_back(elements_parser{ {}, state_t::parsing_elements, p });
+                        return p->on_false();
+                    }
+                    return parse_error_t{};
+                }
+
+                std::optional<parse_error_t> on_string_begin()noexcept {
+                    if (state == state_t::parsing_C) {
+                        auto p = parent;
+                        p->_stack.emplace_back(elements_parser{ {}, state_t::parsing_elements, p });
+                        return p->on_string_begin();
+                    }
+                    return parse_error_t{};
+                }
+
+                std::optional<parse_error_t> on_number_begin(const char c)noexcept {
+                    if (state == state_t::parsing_C) {
+                        auto p = parent;
+                        p->_stack.emplace_back(elements_parser{ {}, state_t::parsing_elements, p });
+                        return p->on_number_begin(c);
+                    }
+                    return parse_error_t{};
+                }
+
+                std::optional<parse_error_t> on_left_square_bracket()noexcept {
+                    if (state == state_t::parsing_C) {
+                        auto p = parent;
+                        p->_stack.emplace_back(elements_parser{ {}, state_t::parsing_elements, p });
+                        return p->on_left_square_bracket();
+                    }
+                    return parse_error_t{};
+                }
+
+                std::optional<parse_error_t> on_right_square_bracket()noexcept {
+                    auto p = parent;
+                    auto err = p->builder->on_array_end();
+                    p->_stack.pop_back();
+                    if (p->_stack.empty()) {
+                        p->builder->on_document_end();
+                        return parse_error_t::happy_ending;
+                    }
+                    return err;
+                }
+
+                std::optional<parse_error_t> on_left_brace()noexcept {
+                    if (state == state_t::parsing_C) {
+                        auto p = parent;
+                        p->_stack.emplace_back(elements_parser{ {}, state_t::parsing_elements, p });
+                        return p->on_left_brace();
+                    }
+                    return parse_error_t{};
+                }
+
+                state_t state;
+                parser* parent;
+            };
+
+            struct elements_parser : parse_functor_base {
+                std::optional<parse_error_t> on_null()noexcept {
+                    auto p = parent;
+                    p->_stack.back() = D_parser{ {}, state_t::parsing_D, p };
+                    p->_stack.emplace_back(value_parser{ {}, state_t::parsing_value, p });
+                    return p->on_null();
+                }
+
+                std::optional<parse_error_t> on_true()noexcept {
+                    auto p = parent;
+                    p->_stack.back() = D_parser{ {}, state_t::parsing_D, p };
+                    p->_stack.emplace_back(value_parser{ {}, state_t::parsing_value, p });
+                    return p->on_true();
+                }
+
+                std::optional<parse_error_t> on_false()noexcept {
+                    auto p = parent;
+                    p->_stack.back() = D_parser{ {}, state_t::parsing_D, p };
+                    p->_stack.emplace_back(value_parser{ {}, state_t::parsing_value, p });
+                    return p->on_false();
+                }
+
+                std::optional<parse_error_t> on_string_begin()noexcept {
+                    auto p = parent;
+                    p->_stack.back() = D_parser{ {}, state_t::parsing_D, p };
+                    p->_stack.emplace_back(value_parser{ {}, state_t::parsing_value, p });
+                    return p->on_string_begin();
+                }
+
+                std::optional<parse_error_t> on_number_begin(const char c)noexcept {
+                    auto p = parent;
+                    p->_stack.back() = D_parser{ {}, state_t::parsing_D, p };
+                    p->_stack.emplace_back(value_parser{ {}, state_t::parsing_value, p });
+                    return p->on_number_begin(c);
+                }
+
+                std::optional<parse_error_t> on_left_square_bracket()noexcept {
+                    auto p = parent;
+                    p->_stack.back() = D_parser{ {}, state_t::parsing_D, p };
+                    p->_stack.emplace_back(value_parser{ {}, state_t::parsing_value, p });
+                    return p->on_left_square_bracket();
+                }
+
+                std::optional<parse_error_t> on_left_brace()noexcept {
+                    auto p = parent;
+                    p->_stack.back() = D_parser{ {}, state_t::parsing_D, p };
+                    p->_stack.emplace_back(value_parser{ {}, state_t::parsing_value, p });
+                    return p->on_left_brace();
+                }
+
+                state_t state;
+                parser* parent;
+            };
+
+            struct D_parser : parse_functor_base {
+                std::optional<parse_error_t> on_right_square_bracket()noexcept {
+                    auto p = parent;
+                    p->_stack.pop_back();
+                    assert(!p->_stack.empty());
+                    return p->on_right_square_bracket();
+                }
+
+                std::optional<parse_error_t> on_comma()noexcept {
+                    auto p = parent;
+                    p->_stack.back() = elements_parser{ {}, state_t::parsing_elements, p };
+                    return {};
+                }
+
+                state_t state;
+                parser* parent;
+            };
+
+            using sub_parser = std::variant<
+                json_parser,
+                object_parser,
+                A_parser,
+                B_parser,
+                pair_parser,
+                value_parser,
+                array_parser,
+                C_parser,
+                elements_parser,
+                D_parser
+            >;
+
+            std::vector<sub_parser> _stack;
+        };
+
+        struct document_printer {
+            document_printer(int max_depth = 0)noexcept {}
+
+            std::optional<parse_error_t> on_document_begin()noexcept {
+                print_space();
+                std::cout << "document begin\n";
+                ++_depth;
+                return {};
+            }
+
+            std::optional<parse_error_t> on_document_end()noexcept {
+                --_depth;
+                print_space();
+                std::cout << "document end\n";
+                return {};
+            }
+
+            std::optional<parse_error_t> on_object_begin()noexcept {
+                print_space();
+                std::cout << "object begin\n";
+                ++_depth;
+                return {};
+            }
+
+            std::optional<parse_error_t> on_object_end()noexcept {
+                --_depth;
+                print_space();
+                std::cout << "object end\n";
+                return {};
+            }
+
+            std::optional<parse_error_t> on_array_begin()noexcept {
+                print_space();
+                std::cout << "array begin\n";
+                ++_depth;
+                return {};
+            }
+
+            std::optional<parse_error_t> on_array_end()noexcept {
+                --_depth;
+                print_space();
+                std::cout << "array end\n";
+                return {};
+            }
+
+            std::optional<parse_error_t> on_key(std::string key)noexcept {
+                print_space();
+                std::cout << std::format("key:\"{}\"\n", key);
+                return {};
+            }
+
+            std::optional<parse_error_t> on_string(std::string str)noexcept {
+                print_space();
+                std::cout << std::format("string:\"{}\"\n", str);
+                return {};
+            }
+
+            std::optional<parse_error_t> on_number(std::string num)noexcept {
+                print_space();
+                std::cout << std::format("number:{}\n", num);
+                return {};
+            }
+
+            std::optional<parse_error_t> on_bool(const bool b)noexcept {
+                print_space();
+                std::cout << std::format("boolean:{}\n", b ? "true" : "false");
+                return {};
+            }
+
+            std::optional<parse_error_t> on_null()noexcept {
+                print_space();
+                std::cout << "null\n";
+                return {};
+            }
+
+            int get()noexcept { return 0; }
+
+            private:
+            void print_space()const noexcept {
+                std::string str(_depth * 4, ' ');
+                std::cout << str;
+            }
+
+            int _depth = 0;
+        };
+
+    }
+
+
+    struct value {
+
+        value()noexcept = default;
+
+        template<class T>
+            requires
+        std::same_as<T, double> ||
+            std::same_as<T, bool> ||
+            std::constructible_from<std::string, T> ||
+            std::constructible_from<std::vector<value>, T> ||
+            std::constructible_from<std::map<std::string, value>, T> ||
+            std::constructible_from<std::monostate, T>
+            value(T&& x)noexcept :
+            data{ std::forward<T>(x) } {}
+
+
+        value(std::initializer_list<value> arr)noexcept {
+            data.emplace<std::vector<value>>(std::move(arr));
         }
 
-        value(double x) noexcept: _type{ Type::Number } {
-            _num = x;
+        value(std::initializer_list<std::pair<const std::string, value>> obj)noexcept {
+            data.emplace<std::map<std::string, value>>(std::move(obj));
         }
 
-        value(int x) noexcept: _type{ Type::Number } {
-            _num = double{ static_cast<double>(x) };
+        value(const value&)noexcept = default;
+        value(value&&)noexcept = default;
+
+        value& operator=(const value& other)noexcept = default;
+        value& operator=(value&& other)noexcept = default;
+
+        value& operator=(std::initializer_list<value> arr)noexcept {
+            data.emplace<std::vector<value>>(std::move(arr));
+            return *this;
         }
 
-        value(bool b) noexcept {
-            _b = b;
-            _type = b ? Type::True : Type::False;
+        value& operator=(std::initializer_list<std::pair<const std::string, value>> obj)noexcept {
+            data.emplace<std::map<std::string, value>>(std::move(obj));
+            return *this;
         }
 
-        value(const std::string& str) {
-            _str = ::new std::string(str);
-            _type = Type::String;
+        bool is_number()const noexcept {
+            return std::holds_alternative<double>(data);
         }
 
-        value(std::string&& str) {
-            _str = ::new std::string(std::move(str));
-            _type = Type::String;
+        bool is_string()const noexcept {
+            return std::holds_alternative<std::string>(data);
         }
 
-        value(const char* str) {
-            _str = ::new std::string(str);
-            _type = Type::String;
+        bool is_null()const noexcept {
+            return std::holds_alternative<std::monostate>(data);
         }
 
-        value(const std::vector<value>& array) {
-            _arr = ::new std::vector<value>(array);
-            _type = Type::Array;
+        bool is_bool()const noexcept {
+            return std::holds_alternative<bool>(data);
         }
 
-        value(std::vector<value>&& array) {
-            _arr = ::new std::vector<value>(std::move(array));
-            _type = Type::Array;
+        bool is_array()const noexcept {
+            return std::holds_alternative<std::vector<value>>(data);
         }
 
-        value(const std::unordered_map<std::string, value>& obj) {
-            _obj = ::new std::unordered_map<std::string, value>(obj);
-            _type = Type::Object;
+        bool is_object()const noexcept {
+            return std::holds_alternative<std::map<std::string, value>>(data);
         }
 
-        value(std::unordered_map<std::string, value>&& obj) {
-            _obj = ::new std::unordered_map<std::string, value>(std::move(obj));
-            _type = Type::Object;
+        auto& get_object() {
+            return std::get<std::map<std::string, value>>(data);
         }
 
-        value(Type) noexcept: _type{ Type::Null } {}
+        const auto& get_object()const {
+            return std::get<std::map<std::string, value>>(data);
+        }
 
-        friend bool operator==(const value&, const value&);
+        auto& get_array() {
+            return std::get<std::vector<value>>(data);
+        }
 
-        friend bool operator!=(const value&, const value&);
+        const auto& get_array()const {
+            return std::get<std::vector<value>>(data);
+        }
 
-        value& operator[](const std::string& key) {
+        auto& get_number() {
+            return std::get<double>(data);
+        }
+
+        auto get_number()const {
+            return std::get<double>(data);
+        }
+
+        auto& get_string() {
+            return std::get<std::string>(data);
+        }
+
+        const auto& get_string()const {
+            return std::get<std::string>(data);
+        }
+
+        bool& get_bool() {
+            return std::get<bool>(data);
+        }
+
+        bool get_bool()const {
+            return std::get<bool>(data);
+        }
+
+        std::monostate get_null()const {
+            return std::get<std::monostate>(data);
+        }
+
+        void emplace_null(const std::monostate = {})noexcept {
+            data.emplace<std::monostate>();
+        }
+
+        double& emplace_number()noexcept {
+            data.emplace<double>();
+            return std::get<double>(data);
+        }
+
+        void emplace_number(const double x)noexcept {
+            data.emplace<double>(x);
+        }
+
+        bool& emplace_bool()noexcept {
+            data.emplace<bool>();
+            return std::get<bool>(data);
+        }
+
+        void emplace_bool(const bool b)noexcept {
+            data.emplace<bool>(b);
+        }
+
+        std::string& emplace_string()noexcept {
+            data.emplace<std::string>();
+            return std::get<std::string>(data);
+        }
+
+        void emplace_string(std::string str)noexcept {
+            data.emplace<std::string>(std::move(str));
+        }
+
+        auto& emplace_array()noexcept {
+            data.emplace<std::vector<value>>();
+            return std::get<std::vector<value>>(data);
+        }
+
+        void emplace_array(std::vector<value> arr)noexcept {
+            data.emplace<std::vector<value>>(std::move(arr));
+        }
+
+        auto& emplace_object()noexcept {
+            data.emplace<std::map<std::string, value>>();
+            return std::get<std::map<std::string, value>>(data);
+        }
+
+        void emplace_object(std::map<std::string, value> obj)noexcept {
+            data.emplace<std::map<std::string, value>>(std::move(obj));
+        }
+
+        auto& operator[](const std::string& key) {
             return get_object()[key];
         }
 
-        const value& operator[](const std::string& key)const {
+        const auto& operator[](const std::string& key)const {
             return get_object().at(key);
         }
 
-        value& operator=(const value& other) {
-            if (this == std::addressof(other))
-                return *this;
-            if (_type != other._type) {
-                _destroy();
-                _type = other._type;
-            }
-            switch (_type) {
-                case Type::Number:
-                    _num = other._num;
-                    break;
-                case Type::String:
-                    _str = ::new std::string(*static_cast<std::string*>(other._str));
-                    break;
-                case Type::Null:
-                case Type::False:
-                case Type::True:
-                    break;
-                case Type::Array:
-                    _arr = ::new std::vector<value>(*static_cast<std::vector<value>*>(other._arr));
-                    break;
-                case Type::Object:
-                    _obj = ::new std::unordered_map<std::string, value>(
-                        *static_cast<std::unordered_map<std::string, value>*>(other._obj)
-                        );
-                    break;
-                case Type::Nothing:
-                    break;
-            }
-            return *this;
+        auto& operator[](const size_t index) {
+            return get_array()[index];
         }
 
-        value& operator=(value&& other)noexcept {
-            if (_type != other._type) {
-                _destroy();
-                _type = other._type;
-            }
-            other._type = Type::Nothing;
-            switch (_type) {
-                case Type::Number:
-                    _num = other._num;
-                    break;
-                case Type::String:
-                    _str = other._str;
-                    break;
-                case Type::Null:
-                case Type::False:
-                case Type::True:
-                    break;
-                case Type::Array:
-                    _arr = other._arr;
-                    break;
-                case Type::Object:
-                    _obj = other._obj;
-                    break;
-                case Type::Nothing:;
-            }
-            return *this;
+        const auto& operator[](const size_t index)const {
+            return get_array()[index];
         }
 
-        value& operator=(double x) noexcept {
-            _destroy();
-            _type = Type::Number;
-            _num = x;
-            return *this;
+        auto operator==(const value& other)const noexcept {
+            return data == other.data;
         }
 
-        value& operator=(int x) noexcept {
-            _destroy();
-            _type = Type::Number;
-            _num = double{ static_cast<double>(x) };
-            return *this;
+        void swap(value& other)noexcept {
+            std::swap(data, other.data);
         }
 
-        value& operator=(bool b) noexcept {
-            _destroy();
-            _type = b ? Type::True : Type::False;
-            _b = b;
-            return *this;
+        std::string type()const noexcept {
+            if (std::holds_alternative<std::monostate>(data))
+                return "null";
+            else if (std::holds_alternative<std::vector<value>>(data))
+                return "array";
+            else if (std::holds_alternative<std::map<std::string, value>>(data))
+                return "object";
+            else if (std::holds_alternative<double>(data))
+                return "number";
+            else if (std::holds_alternative<std::string>(data))
+                return "string";
+            else if (std::holds_alternative<bool>(data))
+                return "boolean";
+            return "";
         }
 
-        value& operator=(const std::string& str) {
-            _destroy();
-            _str = ::new std::string(str);
-            _type = Type::String;
-            return *this;
-        }
-
-        value& operator=(std::string&& str) {
-            _destroy();
-            _str = ::new std::string(std::move(str));
-            _type = Type::String;
-            return *this;
-        }
-
-        value& operator=(const char* str) {
-            _destroy();
-            _str = ::new std::string(str);
-            _type = Type::String;
-            return *this;
-        }
-
-        value& operator=(const std::vector<value>& array) {
-            _destroy();
-            _arr = ::new std::vector<value>(array);
-            _type = Type::Array;
-            return *this;
-        }
-
-        value& operator=(std::vector<value>&& array) {
-            _destroy();
-            _arr = ::new std::vector<value>(std::move(array));
-            _type = Type::Array;
-            return *this;
-        }
-
-        value& operator=(const std::unordered_map<std::string, value>& obj) {
-            _destroy();
-            _obj = ::new std::unordered_map<std::string, value>(obj);
-            _type = Type::Object;
-            return *this;
-        }
-
-        value& operator=(std::unordered_map<std::string, value>&& obj) {
-            _destroy();
-            _obj = ::new std::unordered_map<std::string, value>(std::move(obj));
-            _type = Type::Object;
-            return *this;
-        }
-
-        value& operator=(Type) noexcept {
-            _destroy();
-            _type = Type::Null;
-            return *this;
-        }
-
-        [[nodiscard]] bool is_number()const noexcept { return _type == Type::Number; }
-        [[nodiscard]] bool is_bool()const noexcept { return _type == Type::True || _type == Type::False; }
-        [[nodiscard]] bool is_string()const noexcept { return _type == Type::String; }
-        [[nodiscard]] bool is_array()const noexcept { return _type == Type::Array; }
-        [[nodiscard]] bool is_object()const noexcept { return _type == Type::Object; }
-
-        [[nodiscard]] double get_number() const {
-            if (_type != Type::Number)
-                throw std::runtime_error{ "The value isn't a number." };
-            return _num;
-        }
-
-        [[nodiscard]] double& get_number() {
-            if (_type != Type::Number)
-                throw std::runtime_error{ "The value isn't a number." };
-            return _num;
-        }
-
-        [[nodiscard]] bool get_bool() const {
-            if (_type != Type::True && _type != Type::False)
-                throw std::runtime_error{ "The value isn't a Boolean." };
-            return _b;
-        }
-
-        [[nodiscard]] bool& get_bool() {
-            if (_type != Type::True && _type != Type::False)
-                throw std::runtime_error{ "The value isn't a Boolean." };
-            return _b;
-        }
-
-        [[nodiscard]] const std::string& get_string() const {
-            if (_type != Type::String)
-                throw std::runtime_error{ "The value isn't a string." };
-            return *static_cast<std::string*>(_str);
-        }
-
-        [[nodiscard]] std::string& get_string() {
-            if (_type != Type::String)
-                throw std::runtime_error{ "The value isn't a string." };
-            return *static_cast<std::string*>(_str);
-        }
-
-        [[nodiscard]] const std::vector<value>& get_array() const {
-            if (_type != Type::Array)
-                throw std::runtime_error{ "The value isn't an array." };
-            return *static_cast<std::vector<value> *>(_arr);
-        }
-
-        [[nodiscard]] std::vector<value>& get_array() {
-            if (_type != Type::Array)
-                throw std::runtime_error{ "The value isn't an array." };
-            return *static_cast<std::vector<value> *>(_arr);
-        }
-
-        [[nodiscard]] const std::unordered_map<std::string, value>& get_object() const {
-            if (_type != Type::Object)
-                throw std::runtime_error{ "The value isn't an object." };
-            return *static_cast<std::unordered_map<std::string, value> *>(_obj);
-        }
-
-        [[nodiscard]] std::unordered_map<std::string, value>& get_object() {
-            if (_type != Type::Object)
-                throw std::runtime_error{ "The value isn't an object." };
-            return *static_cast<std::unordered_map<std::string, value> *>(_obj);
-        }
-
-
-        ~value() {
-            _destroy();
-        }
-
-        private:
-        void _destroy() noexcept {
-            switch (_type) {
-                case Type::Number:
-                case Type::True:
-                case Type::False:
-                case Type::Null:
-                case Type::Nothing:
-                    break;
-                case Type::String:
-                    delete static_cast<std::string*>(_str);
-                    break;
-                case Type::Array:
-                    delete static_cast<std::vector<value>*>(_arr);
-                    break;
-                case Type::Object:
-                    delete static_cast<std::unordered_map<std::string, value>*>(_obj);
-            }
-            _type = Type::Nothing;
-        }
-
-        private:
-        Type _type = Type::Nothing;
-        union {
-            double _num;
-            bool _b;
-            void* _arr;
-            void* _obj;
-            void* _str;
-        };
-
+        std::variant<
+            std::monostate,                 // null
+            bool,                           // true false
+            double,
+            std::string,
+            std::vector<value>,             // array
+            std::map<std::string, value>    // object
+        > data;
     };
 
-    bool operator==(const value& x, const value& y) {
-        if (x._type == y._type) {
-            switch (x._type) {
-                case value::Type::Number:
-                    return x._num == y._num;
-                case value::Type::String:
-                    return *(static_cast<std::string*>(x._str)) == *(static_cast<std::string*>(y._str));
-                case value::Type::Null:
-                case value::Type::False:
-                case value::Type::True:
-                case value::Type::Nothing:
-                    return true;
-                case value::Type::Array:
-                    return *(static_cast<std::vector<value> *>(x._arr)) == *(static_cast<std::vector<value> *>(y._arr));
-                case value::Type::Object:
-                    return *(static_cast<std::unordered_map<std::string, value> *>(x._obj)) ==
-                        *(static_cast<std::unordered_map<std::string, value> *>(y._obj));
-            }
-        }
-        return false;
-    }
-
-    bool operator!=(const value& x, const value& y) {
-        return !(x == y);
-    }
-
-
-    using object = std::unordered_map<std::string, value>;
+    static constexpr std::monostate null{};
     using array = std::vector<value>;
+    using object = std::map<std::string, value>;
+    using document = std::variant<std::monostate, array, object>;
 
-    constexpr value::Type null = value::Type::Null;
+    namespace detail {
+        struct document_builder {
 
-    namespace _detail {
+            document_builder(int depth)noexcept :_max_depth{ depth } {}
 
-        enum class Token {
-            Lbrace,
-            Rbrace,
-            Number,
-            String,
-            Null,
-            LSquare,
-            RSquare,
-            Comma,  //逗号
-            Colon,  //冒号
-            True,
-            False,
-            BUFFER_END,
-            ERROR
-        };
-
-        class _Tokenizer {
-            public:
-            void set_buffer(const char* begin, const char* end) {
-                _iter = begin;
-                _end = end;
+            std::optional<parse_error_t> on_document_begin()noexcept {
+                _stack.push_back(&_res);
+                return {};
             }
 
-            [[nodiscard]] Token peek() const noexcept { return _last_token; }
+            std::optional<parse_error_t> on_document_end()noexcept {
+                _finish = true;
+                return {};
+            }
 
-            Token get_token() {
-                if (_last_token == Token::Number && !_double.empty())
-                    return _last_token;
-                if (_last_token == Token::String && !_string.empty())
-                    return _last_token;
+            std::optional<parse_error_t> on_object_begin()noexcept {
+                assert(!_stack.empty());
+                ++_depth;
+                if (_depth > _max_depth)
+                    return parse_error_t{};
+                std::visit([this](auto s)noexcept {
+                    if constexpr (std::is_same_v<json::document*, decltype(s)>) {
+                        s->template emplace<json::object>();
+                        _stack.emplace_back(&std::get<json::object>(*s));
+                    }
+                    else if constexpr (std::is_same_v<json::array*, decltype(s)>) {
+                        s->emplace_back();
+                        s->back().data.template emplace<json::object>();
+                        _stack.emplace_back(&std::get<json::object>(s->back().data));
+                    }
+                    else if constexpr (std::is_same_v<json::object::iterator, decltype(s)>) {
+                        s->second.data.template emplace<json::object>();
+                        _stack.back() = &std::get<json::object>(s->second.data);
+                    }
+                    }, _stack.back());
+                return {};
+            }
 
-                while (_iter != _end) {
-                    const char c = *_iter;
-                    switch (_state) {
-                        case State::P_STR:
-                            if (c != '\"') {
-                                ++_iter;
-                                _string.push_back(c);
+            std::optional<parse_error_t> on_object_end()noexcept {
+                assert(std::get_if<json::object*>(&_stack.back()) != nullptr);
+                _stack.pop_back();
+                --_depth;
+                return {};
+            }
+
+            std::optional<parse_error_t> on_array_begin()noexcept {
+                assert(!_stack.empty());
+                ++_depth;
+                if (_depth > _max_depth)
+                    return parse_error_t{};
+                std::visit([this](auto s)noexcept {
+                    if constexpr (std::is_same_v<json::document*, decltype(s)>) {
+                        s->template emplace<json::array>();
+                        _stack.emplace_back(&std::get<json::array>(*s));
+                    }
+                    else if constexpr (std::is_same_v<json::array*, decltype(s)>) {
+                        s->emplace_back();
+                        s->back().data.template emplace<json::array>();
+                        _stack.emplace_back(&std::get<json::array>(s->back().data));
+                    }
+                    else if constexpr (std::is_same_v<json::object::iterator, decltype(s)>) {
+                        s->second.data.template emplace<json::array>();
+                        _stack.back() = &std::get<json::array>(s->second.data);
+                    }
+                    }, _stack.back());
+                return {};
+            }
+
+            std::optional<parse_error_t> on_array_end()noexcept {
+                assert(std::get_if<json::array*>(&_stack.back()) != nullptr);
+                _stack.pop_back();
+                --_depth;
+                return {};
+            }
+
+            std::optional<parse_error_t> on_key(std::string key)noexcept {
+                assert(std::get_if<json::object*>(&_stack.back()) != nullptr);
+                return std::visit([&, this](auto s)noexcept->std::optional<parse_error_t> {
+                    if constexpr (std::is_same_v<json::object*, decltype(s)>) {
+                        if (s->contains(key))
+                            return parse_error_t{};
+                        auto [iter, _] = s->emplace(std::move(key), json::value{});
+                        _stack.emplace_back(iter);
+                    }
+                    return {};
+                    }, _stack.back());
+            }
+
+            std::optional<parse_error_t> on_string(std::string str)noexcept {
+                assert(!_stack.empty());
+                std::visit([&, this](auto s)noexcept {
+                    if constexpr (std::is_same_v<json::array*, decltype(s)>) {
+                        s->emplace_back();
+                        s->back().data.template emplace<std::string>(std::move(str));
+                    }
+                    else if constexpr (std::is_same_v<json::object::iterator, decltype(s)>) {
+                        s->second.data.template emplace<std::string>(std::move(str));
+                        _stack.pop_back();
+                    }
+                    }, _stack.back());
+                return {};
+            }
+
+            std::optional<parse_error_t> on_number(std::string num)noexcept {
+                assert(!_stack.empty());
+                double x;
+                if (auto [_, e] = std::from_chars(num.data(), num.data() + num.size(), x); e != std::errc())
+                    x = 0;
+                std::visit([=, this](auto s)noexcept {
+                    if constexpr (std::is_same_v<json::array*, decltype(s)>) {
+                        s->emplace_back();
+                        s->back().data.template emplace<double>(x);
+                    }
+                    else if constexpr (std::is_same_v<json::object::iterator, decltype(s)>) {
+                        s->second.data.template emplace<double>(x);
+                        _stack.pop_back();
+                    }
+                    }, _stack.back());
+                return {};
+            }
+
+            std::optional<parse_error_t> on_bool(const bool b)noexcept {
+                assert(!_stack.empty());
+                std::visit([=, this](auto s)noexcept {
+                    if constexpr (std::is_same_v<json::array*, decltype(s)>) {
+                        s->emplace_back();
+                        s->back().data.template emplace<bool>(b);
+                    }
+                    else if constexpr (std::is_same_v<json::object::iterator, decltype(s)>) {
+                        s->second.data.template emplace<bool>(b);
+                        _stack.pop_back();
+                    }
+                    }, _stack.back());
+                return {};
+            }
+
+            std::optional<parse_error_t> on_null()noexcept {
+                assert(!_stack.empty());
+                std::visit([=, this](auto s)noexcept {
+                    if constexpr (std::is_same_v<json::array*, decltype(s)>) {
+                        s->emplace_back();
+                    }
+                    else if constexpr (std::is_same_v<json::object::iterator, decltype(s)>) {
+                        _stack.pop_back();
+                    }
+                    }, _stack.back());
+                return {};
+            }
+
+            bool finish()const noexcept {
+                return _finish;
+            }
+
+            json::document get()noexcept {
+                return std::move(_res);
+            }
+
+            private:
+            using state_type = std::variant<
+                json::document*,
+                json::object*,
+                json::object::iterator,
+                json::array*
+            >;
+
+            bool _finish = false;
+            document _res;
+            std::vector<state_type> _stack;
+            int _depth = 0;
+            int _max_depth;
+        };
+
+        struct serializer {
+            std::optional<serialize_error_t> operator()(const json::document& dom)noexcept {
+                return std::visit(*this, dom);
+            }
+
+            std::optional<serialize_error_t> operator()(const json::value& v)noexcept {
+                return std::visit(*this, v.data);
+            }
+
+            std::optional<serialize_error_t> operator()(const json::array& arr)noexcept {
+                js += '[';
+                for (const auto& v : arr) {
+                    auto err = std::visit(*this, v.data);
+                    if (err)
+                        return err;
+                    js += ',';
+                }
+                if (js.back() == ',')
+                    js.back() = ']';
+                else js += ']';
+                return {};
+            }
+
+            std::optional<serialize_error_t> operator()(const json::object& obj)noexcept {
+                js += '{';
+                for (const auto& [k, v] : obj) {
+                    auto err = (*this)(k);
+                    if (err)
+                        return err;
+                    js += ':';
+                    err = std::visit(*this, v.data);
+                    if (err)
+                        return err;
+                    js += ',';
+                }
+                if (js.back() == ',')
+                    js.back() = '}';
+                else js += '}';
+                return {};
+            }
+
+            std::optional<serialize_error_t> operator()(const std::string& str)noexcept {
+                js += '\"';
+                for (auto i = 0; i < str.size(); ++i) {
+                    const auto c = str[i];
+                    if (auto n = std::countl_one((uint8_t)c); n == 0) {
+                        switch (c) {
+                            case '\"':
+                                js += "\\\"";
                                 continue;
-                            }
-                            else {
-                                ++_iter;
-                                _last_token = Token::String;
-                                return Token::String;
-                            }
-                        case State::P_NUM:
-                            {
-                                switch (c) {
-                                    case ' ':
-                                    case ',':
-                                    case ']':
-                                    case '}':
-                                    case '\n':
-                                    case '\t':
-                                        _last_token = Token::Number;
-                                        return Token::Number;
-                                    case 'e':
-                                        _state = State::P_NUM_DOT_NUM_E;
-                                        _double.push_back(c);
-                                        ++_iter;
-                                        continue;
-                                    case '0':
-                                    case '1':
-                                    case '2':
-                                    case '3':
-                                    case '4':
-                                    case '5':
-                                    case '6':
-                                    case '7':
-                                    case '8':
-                                    case '9':
-                                        _double.push_back(c);
-                                        ++_iter;
-                                        continue;
-                                    case '.':
-                                        _double.push_back(c);
-                                        _state = State::P_NUM_DOT;
-                                        ++_iter;
-                                        continue;
-                                    default:
-                                        _last_token = Token::ERROR;
-                                        return Token::ERROR;
+                            case '\\':
+                                js += '\\';
+                                js += '\\';
+                                continue;
+                            case '\b':
+                                js += '\\';
+                                js += 'b';
+                                continue;
+                            case '\f':
+                                js += '\\';
+                                js += 'f';
+                                continue;
+                            case '\n':
+                                js += '\\';
+                                js += 'n';
+                                continue;
+                            case '\r':
+                                js += '\\';
+                                js += 'r';
+                                continue;
+                            case '\t':
+                                js += '\\';
+                                js += 't';
+                                continue;
+                            default:
+                                if (std::iscntrl(c)) {
+                                    return serialize_error_t::unknown_utf8_bytes;
                                 }
-                            }
-                        case State::P_NUM_DOT:
-                            {
-                                switch (c) {
-                                    case '0':
-                                    case '1':
-                                    case '2':
-                                    case '3':
-                                    case '4':
-                                    case '5':
-                                    case '6':
-                                    case '7':
-                                    case '8':
-                                    case '9':
-                                        _double.push_back(c);
-                                        ++_iter;
-                                        _state = State::P_NUM_DOT_NUM;
-                                        continue;
-                                    default:
-                                        _last_token = Token::ERROR;
-                                        return Token::ERROR;
-                                }
-                            }
-                        case State::P_NUM_DOT_NUM:
-                            {
-                                switch (c) {
-                                    case '0':
-                                    case '1':
-                                    case '2':
-                                    case '3':
-                                    case '4':
-                                    case '5':
-                                    case '6':
-                                    case '7':
-                                    case '8':
-                                    case '9':
-                                        _double.push_back(c);
-                                        ++_iter;
-                                        continue;
-                                    case ' ':
-                                    case ',':
-                                    case ']':
-                                    case '}':
-                                    case '\n':
-                                    case '\t':
-                                        _last_token = Token::Number;
-                                        return Token::Number;
-                                    case 'e':
-                                    case 'E':
-                                        _state = State::P_NUM_DOT_NUM_E;
-                                        _double.push_back(c);
-                                        ++_iter;
-                                        continue;
-                                    default:
-                                        _last_token = Token::ERROR;
-                                        return Token::ERROR;
-                                }
-                            }
-                        case State::P_NUM_DOT_NUM_E:
-                            {
-                                switch (c) {
-                                    case '0':
-                                    case '1':
-                                    case '2':
-                                    case '3':
-                                    case '4':
-                                    case '5':
-                                    case '6':
-                                    case '7':
-                                    case '8':
-                                    case '9':
-                                        _double.push_back(c);
-                                        ++_iter;
-                                        _state = State::P_NUM_DOT_NUM_E_NUM;
-                                        continue;
-                                    default:
-                                        _last_token = Token::ERROR;
-                                        return Token::ERROR;
-                                }
-                            }
-                        case State::P_NUM_DOT_NUM_E_NUM:
-                            {
-                                switch (c) {
-                                    case '0':
-                                    case '1':
-                                    case '2':
-                                    case '3':
-                                    case '4':
-                                    case '5':
-                                    case '6':
-                                    case '7':
-                                    case '8':
-                                    case '9':
-                                        _double.push_back(c);
-                                        ++_iter;
-                                        continue;
-                                    case ' ':
-                                    case ',':
-                                    case ']':
-                                    case '}':
-                                    case '\n':
-                                    case '\t':
-                                        _last_token = Token::Number;
-                                        return Token::Number;
-                                    default:
-                                        _last_token = Token::ERROR;
-                                        return Token::ERROR;
-                                }
-                            }
-                        case State::NORMAL:
-                            {
-                                switch (c) {
-                                    case '0':
-                                    case '1':
-                                    case '2':
-                                    case '3':
-                                    case '4':
-                                    case '5':
-                                    case '6':
-                                    case '7':
-                                    case '8':
-                                    case '9':
-                                    case '+':
-                                    case '-':
-                                        _state = State::P_NUM;
-                                        _double.push_back(c);
-                                        ++_iter;
-                                        continue;
-                                    case '{':
-                                        ++_iter;
-                                        _last_token = Token::Lbrace;
-                                        return Token::Lbrace;
-                                    case '}':
-                                        ++_iter;
-                                        _last_token = Token::Rbrace;
-                                        return Token::Rbrace;
-                                    case '[':
-                                        ++_iter;
-                                        _last_token = Token::LSquare;
-                                        return Token::LSquare;
-                                    case ']':
-                                        ++_iter;
-                                        _last_token = Token::RSquare;
-                                        return Token::RSquare;
-                                    case ':':
-                                        ++_iter;
-                                        _last_token = Token::Colon;
-                                        return Token::Colon;
-                                    case ',':
-                                        ++_iter;
-                                        _last_token = Token::Comma;
-                                        return Token::Comma;
-                                    case ' ':
-                                    case '\n':
-                                    case '\t':
-                                        while (_iter != _end && *_iter == c)
-                                            ++_iter;
-                                        continue;
-                                    case '\"':
-                                        _state = State::P_STR;
-                                        ++_iter;
-                                        continue;
-                                    case 't':
-                                        _state = State::T;
-                                        ++_iter;
-                                        continue;
-                                    case 'f':
-                                        _state = State::F;
-                                        ++_iter;
-                                        continue;
-                                    case 'n':
-                                        _state = State::N;
-                                        ++_iter;
-                                        continue;
-                                    default:
-                                        ++_iter;
-                                        continue;
-                                }
-                            }
-                        case State::T:
-                            if (c == 'r')
-                                _state = State::TR;
-                            else {
-                                _last_token = Token::ERROR;
-                                return Token::ERROR;
-                            }
-                            ++_iter;
-                            continue;
-                        case State::TR:
-                            if (c == 'u')
-                                _state = State::TRU;
-                            else {
-                                _last_token = Token::ERROR;
-                                return Token::ERROR;
-                            }
-                            ++_iter;
-                            continue;
-                        case State::TRU:
-                            if (c == 'e')
-                                _state = State::NORMAL;
-                            else {
-                                _last_token = Token::ERROR;
-                                return Token::ERROR;
-                            }
-                            ++_iter;
-                            _last_token = Token::True;
-                            return Token::True;
-                        case State::F:
-                            if (c == 'a')
-                                _state = State::FA;
-                            else {
-                                _last_token = Token::ERROR;
-                                return Token::ERROR;
-                            }
-                            ++_iter;
-                            continue;
-                        case State::FA:
-                            if (c == 'l')
-                                _state = State::FAL;
-                            else {
-                                _last_token = Token::ERROR;
-                                return Token::ERROR;
-                            }
-                            ++_iter;
-                            continue;
-                        case State::FAL:
-                            if (c == 's')
-                                _state = State::FALS;
-                            else {
-                                _last_token = Token::ERROR;
-                                return Token::ERROR;
-                            }
-                            ++_iter;
-                            continue;
-                        case State::FALS:
-                            if (c == 'e')
-                                _state = State::NORMAL;
-                            else {
-                                _last_token = Token::ERROR;
-                                return Token::ERROR;
-                            }
-                            ++_iter;
-                            _last_token = Token::False;
-                            return Token::False;
-                        case State::N:
-                            if (c == 'u')
-                                _state = State::NU;
-                            else {
-                                _last_token = Token::ERROR;
-                                return Token::ERROR;
-                            }
-                            ++_iter;
-                            continue;
-                        case State::NU:
-                            if (c == 'l')
-                                _state = State::NUL;
-                            else {
-                                _last_token = Token::ERROR;
-                                return Token::ERROR;
-                            }
-                            ++_iter;
-                            continue;
-                        case State::NUL:
-                            if (c == 'l')
-                                _state = State::NORMAL;
-                            else {
-                                _last_token = Token::ERROR;
-                                return Token::ERROR;
-                            }
-                            ++_iter;
-                            _last_token = Token::Null;
-                            return Token::Null;
-                        default:
-                            return Token::ERROR;
+                                js += c;
+                                continue;
+                        }
+                    }
+                    else if (n > 1 and n < 5) {
+                        if (i + n > str.size())
+                            return serialize_error_t::unknown_utf8_bytes;
+                        while (n--) {
+                            js += str[i++];
+                        }
+                        --i;
+                        continue;
+                    }
+                    else {
+                        return serialize_error_t::unknown_utf8_bytes;
                     }
                 }
-
-                _last_token = Token::BUFFER_END;
-                return Token::BUFFER_END;
+                js += '\"';
+                return {};
             }
 
-            std::string get_string() {
-                std::string res;
-                _string.swap(res);
-                _state = State::NORMAL;
-                return res;
+            std::optional<serialize_error_t> operator()(const bool b)noexcept {
+                js += b ? "true" : "false";
+                return {};
             }
 
-            double get_number() {
-                std::string res;
-                _double.swap(res);
-                _state = State::NORMAL;
-                return std::atof(res.data());
+            std::optional<serialize_error_t> operator()(const std::monostate&)noexcept {
+                js += "null";
+                return {};
+            }
+
+            std::optional<serialize_error_t> operator()(const double x)noexcept {
+                std::format_to(std::back_inserter(js), "{}", x);
+                return {};
+            }
+
+            const std::string& get()const noexcept {
+                return js;
+            }
+
+            std::string get()noexcept {
+                return std::move(js);
             }
 
             private:
-            const char* _iter;
-            const char* _end;
-            enum struct State {
-                P_STR,
-                P_NUM,
-                P_NUM_DOT,
-                P_NUM_DOT_NUM,
-                P_NUM_DOT_NUM_E,
-                P_NUM_DOT_NUM_E_NUM,
-                NORMAL,
-                T,
-                TR,
-                TRU,
-                F,
-                FA,
-                FAL,
-                FALS,
-                N,
-                NU,
-                NUL
-            };
-            State _state = State::NORMAL;
-            std::string _string;
-            std::string _double;
-            Token _last_token = Token::ERROR;
-        };
-
-        class _Parser {
-            public:
-            _Parser() {
-                _stack.reserve(128);
-            }
-
-            enum struct result {
-                normal,
-                error,
-                buffer_end,
-                finished
-            };
-
-            void set_buffer(const char* begin, const char* end) noexcept {
-                _tokenizer.set_buffer(begin, end);
-                if (_state != State::begin) {
-                    _state = State::normal;
-                    _tokenizer.get_token();
+            const char* char_to_hex(const char c)noexcept {
+                static char buf[3] = { 0, 0, 0 };
+                if (const uint8_t x = (uint8_t)c >> 4; x < 10) {
+                    buf[0] = '0' + x;
                 }
-            }
+                else buf[0] = 'a' + (x - 10);
 
-            json::object get_result() noexcept {
-                json::object obj;
-                std::swap(obj, _object);
-                return { std::move(obj) };
-
-            }
-
-            result parse() {
-                while (true) {
-                    switch (_state) {
-                        case State::normal:
-                            {
-                                while (!_stack.empty()) {
-                                    auto res = _stack.back()(&_tokenizer, (void*)&_stack);
-                                    if (res == result::buffer_end) {
-                                        _state = State::buffer_end;
-                                        return res;
-                                    }
-                                    if (res == result::error) {
-                                        _state = State::error;
-                                        return res;
-                                    }
-                                }
-                                _state = State::finished;
-                                return result::finished;
-                            }
-                        case State::error:
-                            return result::error;
-                        case State::buffer_end:
-                            return result::buffer_end;
-                        case State::finished:
-                            return result::finished;
-                        case State::begin:
-                            _tokenizer.get_token();
-                            _stack.push_back(Getter{
-                                    0,
-                                    (void*)&_object, //json::object*
-                                    Getter::Type::Object
-                                });
-                            _state = State::normal;
-                            continue;
-                        default:
-                            return result::error;
-                    }
+                if (const uint8_t x = (uint8_t)c & 0x0f; x < 10) {
+                    buf[1] = '0' + x;
                 }
+                else buf[1] = 'a' + (x - 10);
+
+                return buf;
             }
 
-            private:
-            struct Getter;
-            using Stack = std::vector<Getter>;
-
-            struct Getter {
-                enum struct Type: char {
-                    Object,
-                    A,
-                    Members,
-                    B,
-                    Pair,
-                    Array,
-                    C,
-                    Elements,
-                    D,
-                    Value
-                };
-
-                Getter(char state, void* data, Getter::Type type) noexcept: state{ state }, data{ data }, type{ type } {}
-
-                result operator()(_Tokenizer* tkp, void* stkp) {
-                    Stack& stack = *((Stack*)stkp);
-
-                    const auto token = tkp->peek();
-                    if (token == Token::ERROR)
-                        return result::error;
-
-
-                    switch (type) {
-                        case Type::Object:
-                            if (state == 0) { // wait a {
-                                if (token == Token::Lbrace) {
-                                    tkp->get_token();
-                                    state = 1;
-                                    stack.push_back(Getter{
-                                            0,
-                                            this->data, //json::object*
-                                            Type::A
-                                        });
-                                }
-                                else if (token == Token::BUFFER_END) {
-                                    return result::buffer_end;
-                                }
-                                else {
-                                    return result::error;
-                                }
-                            }
-                            else {
-                                stack.pop_back();
-                            }
-                            return result::normal;
-                        case Type::A:
-                            if (state == 0) {
-                                if (token == Token::String) {
-                                    state = 1;
-                                    stack.push_back(Getter{
-                                            0,
-                                            this->data,     //json::object*
-                                            Type::Members
-                                        });
-                                    return result::normal;
-                                }
-                                else if (token == Token::Rbrace) {
-                                    tkp->get_token();
-                                    stack.pop_back();
-                                    return result::normal;
-                                }
-                                else if (token == Token::BUFFER_END) {
-                                    return result::buffer_end;
-                                }
-                                return result::error;
-                            }
-                            else {
-                                if (token == Token::Rbrace) {
-                                    tkp->get_token();
-                                    stack.pop_back();
-                                    return result::normal;
-                                }
-                                else if (token == Token::BUFFER_END) {
-                                    return result::normal;
-                                }
-                                else {
-                                    return result::error;
-                                }
-                            }
-                        case Type::Members:
-                            if (state == 0) {
-                                if (token == Token::String) {
-                                    state = 1;
-                                    stack.push_back(Getter{
-                                            0,
-                                            this->data, //json::object*
-                                            Type::Pair
-                                        });
-                                    return result::normal;
-                                }
-                                else if (token == Token::BUFFER_END) {
-                                    return result::buffer_end;
-                                }
-                                else {
-                                    return result::error;
-                                }
-                            }
-                            else if (state == 1) {
-                                if (token == Token::BUFFER_END) {
-                                    return result::buffer_end;
-                                }
-                                state = 2;
-                                stack.push_back(Getter{
-                                        0,
-                                        this->data, //json::object*
-                                        Type::B
-                                    });
-                                return result::normal;
-                            }
-                            else {
-                                stack.pop_back();
-                                return result::normal;
-                            }
-                        case Type::B:
-                            if (state == 0) {
-                                if (token == Token::Rbrace) {
-                                    stack.pop_back();
-                                    return result::normal;
-                                }
-                                else if (token == Token::Comma) {
-                                    tkp->get_token();
-                                    state = 1;
-                                    stack.push_back(Getter{
-                                            0,
-                                            this->data, //json::object*
-                                            Type::Members
-                                        });
-                                    return result::normal;
-                                }
-                                else if (token == Token::BUFFER_END) {
-                                    return result::buffer_end;
-                                }
-                                else return result::error;
-                            }
-                            else {
-                                stack.pop_back();
-                                return result::normal;
-                            }
-                        case Type::Pair:
-                            switch (state) {
-                                case 0: // wait a String
-                                    {
-                                        if (token == Token::String) {
-                                            auto obj = (json::object*)data;
-                                            auto pair = obj->insert({ tkp->get_string(), {} });
-
-                                            if (!pair.second)
-                                                return result::error;
-                                            tkp->get_token();
-                                            data = (void*)&(pair.first->second); //json::value*
-                                            state = 1;
-                                            return result::normal;
-                                        }
-                                        else if (token == Token::BUFFER_END) {
-                                            return result::buffer_end;
-                                        }
-                                        else {
-                                            return result::error;
-                                        }
-                                    }
-                                case 1: // wait :
-                                    {
-                                        if (token == Token::Colon) {
-                                            state = 2;
-                                            tkp->get_token();
-                                            return result::normal;
-                                        }
-                                        else if (token == Token::BUFFER_END) {
-                                            return result::buffer_end;
-                                        }
-                                        else return result::error;
-                                    }
-                                case 2: // wait a Value
-                                    {
-                                        if (token == Token::BUFFER_END) {
-                                            return result::buffer_end;
-                                        }
-                                        state = 3;
-                                        stack.push_back(Getter{
-                                                0,
-                                                this->data, //json::value*
-                                                Type::Value
-                                            });
-                                        return result::normal;
-                                    }
-                                case 3:
-                                    stack.pop_back();
-                                    return result::normal;
-                            }
-                        case Type::Array:
-                            {
-                                if (state == 0) {
-                                    if (token == Token::LSquare) {
-                                        tkp->get_token();
-                                        state = 1;
-                                        stack.push_back(Getter{
-                                                0,
-                                                this->data, //json::array*
-                                                Type::C
-                                            });
-                                        return result::normal;
-                                    }
-                                    else if (token == Token::BUFFER_END) {
-                                        return result::buffer_end;
-                                    }
-                                    else {
-                                        return result::error;
-                                    }
-                                }
-                                else {
-                                    stack.pop_back();
-                                    return result::normal;
-                                }
-                            }
-                        case Type::C:
-                            {
-                                if (state == 0) {
-                                    switch (token) {
-                                        case Token::Lbrace:
-                                        case Token::LSquare:
-                                        case Token::Number:
-                                        case Token::True:
-                                        case Token::False:
-                                        case Token::String:
-                                        case Token::Null:
-                                            {
-                                                state = 1;
-                                                stack.push_back(Getter{
-                                                        0,
-                                                        this->data, //json::array*
-                                                        Type::Elements
-                                                    });
-                                                return result::normal;
-                                            }
-                                        case Token::BUFFER_END:
-                                            return result::buffer_end;
-                                        default:
-                                            {
-                                                if (token == Token::RSquare) {
-                                                    tkp->get_token();
-                                                    stack.pop_back();
-                                                    return result::normal;
-                                                }
-                                                else return result::error;
-                                            }
-                                    }
-                                }
-                                else {
-                                    if (token == Token::RSquare) {
-                                        tkp->get_token();
-                                        stack.pop_back();
-                                        return result::normal;
-                                    }
-                                    else if (token == Token::BUFFER_END) {
-                                        return result::buffer_end;
-                                    }
-                                    else return result::error;
-                                }
-                            }
-                        case Type::Elements:
-                            {
-                                if (state == 0) {
-                                    if (token == Token::BUFFER_END) {
-                                        return result::buffer_end;
-                                    }
-                                    auto arr = (json::array*)data;
-                                    arr->push_back(json::value{});
-                                    state = 1;
-                                    stack.push_back(Getter{
-                                            0,
-                                            (void*)&(arr->back()), //json::value*
-                                            Type::Value
-                                        });
-                                    return result::normal;
-                                }
-                                else if (state == 1) {
-                                    if (token == Token::BUFFER_END) {
-                                        return result::buffer_end;
-                                    }
-                                    state = 2;
-                                    stack.push_back(Getter{
-                                            0,
-                                            this->data, //json::array*
-                                            Type::D
-                                        });
-                                    return result::normal;
-                                }
-                                else {
-                                    stack.pop_back();
-                                    return result::normal;
-                                }
-                            }
-                        case Type::D:
-                            {
-                                if (state == 0) {
-                                    if (token == Token::RSquare) {
-                                        stack.pop_back();
-                                        return result::normal;
-                                    }
-                                    else if (token == Token::Comma) {
-                                        tkp->get_token();
-                                        state = 1;
-                                        stack.push_back(Getter{
-                                                0,
-                                                this->data, //json::array*
-                                                Type::Elements
-                                            });
-                                        return result::normal;
-                                    }
-                                    else if (token == Token::BUFFER_END) {
-                                        return result::buffer_end;
-                                    }
-                                    else return result::error;
-                                }
-                                else {
-                                    stack.pop_back();
-                                    return result::normal;
-                                }
-                            }
-                        case Type::Value:
-                            if (state == 0) {
-                                switch (token) {
-                                    case Token::Lbrace: // wait an object
-                                        {
-                                            auto val = (json::value*)data;
-                                            *val = json::object{};
-                                            state = 1;
-                                            stack.push_back(Getter{
-                                                    0,
-                                                    (void*)&(val->get_object()), //json::object*
-                                                    Type::Object
-                                                });
-                                            return result::normal;
-                                        }
-                                    case Token::Number:
-                                        {
-                                            auto val = (json::value*)data;
-                                            *val = tkp->get_number();
-                                            tkp->get_token();
-                                            stack.pop_back();
-                                            return result::normal;
-                                        }
-                                    case Token::String:
-                                        {
-                                            auto val = (json::value*)data;
-                                            *val = tkp->get_string();
-                                            tkp->get_token();
-                                            stack.pop_back();
-                                            return result::normal;
-                                        }
-                                    case Token::Null:
-                                        {
-                                            auto val = (json::value*)data;
-                                            *val = json::null;
-                                            tkp->get_token();
-                                            stack.pop_back();
-                                            return result::normal;
-                                        }
-                                    case Token::LSquare: // wait an Array
-                                        {
-                                            auto val = (json::value*)data;
-                                            *val = json::array{};
-                                            state = 1;
-                                            stack.push_back(Getter{
-                                                    0,
-                                                    (void*)&(val->get_array()), //json::array*
-                                                    Type::Array
-                                                });
-                                            return result::normal;
-                                        }
-                                    case Token::True:
-                                        {
-                                            auto val = (json::value*)data;
-                                            *val = true;
-                                            tkp->get_token();
-                                            stack.pop_back();
-                                            return result::normal;
-                                        }
-                                    case Token::False:
-                                        {
-                                            auto val = (json::value*)data;
-                                            *val = false;
-                                            tkp->get_token();
-                                            stack.pop_back();
-                                            return result::normal;
-                                        }
-                                    case Token::BUFFER_END:
-                                        return result::buffer_end;
-                                }
-                            }
-                            else {
-                                stack.pop_back();
-                                return result::normal;
-                            }
-                    }
-                    return result::error;
-                }
-
-                char state = 0;
-                void* data;
-
-                const Type type;
-            };
-
-
-            Stack _stack;
-            _Tokenizer _tokenizer;
-            json::object _object;
-
-            enum struct State {
-                normal,
-                error,
-                buffer_end,
-                finished,
-                begin
-            };
-            State _state = State::begin;
-        };
-
-        struct _Serializer {
-            std::string get_result() noexcept {
-                std::string res;
-                std::swap(res, _buffer);
-                return res;
-            }
-
-            void operator()(const json::array& arr) {
-                _buffer.push_back('[');
-                for (const auto& e : arr) {
-                    switch (e.type()) {
-                        case value::Type::Number:
-                            _buffer.append(std::to_string(e.get_number()));
-                            break;
-                        case value::Type::String:
-                            _buffer.push_back('\"');
-                            _buffer.append(e.get_string());
-                            _buffer.push_back('\"');
-                            break;
-                        case value::Type::Null:
-                            _buffer.append("null");
-                            break;
-                        case value::Type::False:
-                            _buffer.append("false");
-                            break;
-                        case value::Type::True:
-                            _buffer.append("true");
-                            break;
-                        case value::Type::Array:
-                            this->operator()(e.get_array());
-                            break;
-                        case value::Type::Object:
-                            this->operator()(e.get_object());
-                            break;
-                        case value::Type::Nothing:
-                            break;
-                    }
-                    _buffer.push_back(',');
-                }
-                _buffer.back() = ']';
-            }
-
-            void operator()(const json::object& obj) {
-                _buffer.push_back('{');
-                for (const auto& p : obj) {
-                    _buffer.push_back('\"');
-                    _buffer.append(p.first.begin(), p.first.end());
-                    _buffer.push_back('\"');
-                    _buffer.push_back(':');
-                    switch (p.second.type()) {
-                        case value::Type::Number:
-                            _buffer.append(std::to_string(p.second.get_number()));
-                            break;
-                        case value::Type::String:
-                            _buffer.push_back('\"');
-                            _buffer.append(p.second.get_string());
-                            _buffer.push_back('\"');
-                            break;
-                        case value::Type::Null:
-                            _buffer.append("null");
-                            break;
-                        case value::Type::False:
-                            _buffer.append("false");
-                            break;
-                        case value::Type::True:
-                            _buffer.append("true");
-                            break;
-                        case value::Type::Array:
-                            this->operator()(p.second.get_array());
-                            break;
-                        case value::Type::Object:
-                            this->operator()(p.second.get_object());
-                            break;
-                        case value::Type::Nothing:
-                            break;
-                    }
-                    _buffer.push_back(',');
-                }
-                _buffer.back() = '}';
-            }
-
-            private:
-            std::string _buffer;
+            std::string js;
         };
     }
 
-
-    json::object parse(const char* first, const char* last) {
-        json::_detail::_Parser parser;
-        parser.set_buffer(first, last);
-        auto res = parser.parse();
-        if (res != _detail::_Parser::result::finished)
-            throw std::invalid_argument{ "Invalid format." };
-        return parser.get_result();
+    std::expected<std::string, serialize_error_t> to_json(const auto& dom)noexcept {
+        detail::serializer serializer;
+        auto err = serializer(dom);
+        if (err)
+            return std::unexpected(*err);
+        return serializer.get();
     }
 
-    json::object from_string(const char* str) {
-        return parse(str, str + strlen(str));
+    template<Builder B = detail::document_builder>
+    std::expected<decltype(std::declval<B>().get()), parse_error_t> parse(const char* data, size_t size, int depth = 19)noexcept {
+        B builder{ depth };
+        detail::parser parser{ &builder };
+        detail::lexer lexer{ &parser };
+
+        auto err = lexer(data, size);
+        if (err) {
+            if (*err != parse_error_t::happy_ending)
+                return std::unexpected(*err);
+            auto end = lexer.skip_space(data + lexer.bytes, data + size);
+            if (end != data + size)
+                return std::unexpected(parse_error_t{});
+            return builder.get();
+        }
+        return std::unexpected(parse_error_t{});
     }
 
-    json::object from_string(const std::string& str) {
-        return parse(str.data(), str.data() + str.size());
-    }
+    template<Builder B = detail::document_builder>
+    std::expected<decltype(std::declval<B>().get()), parse_error_t> from_file(const std::string& path, size_t buf_size = 4096, int depth = 19)noexcept {
+        assert(buf_size > 0);
+        assert(!path.empty());
+        B builder{ depth };
+        detail::parser parser{ &builder };
+        detail::lexer lexer{ &parser };
 
-    json::object from_file(const char* path, size_t buff_s = 4096) {
-        std::string buffer;
-        _detail::_Parser parser;
-        size_t res = 0;
+        std::vector<char> buffer(buf_size);
+        std::FILE* file = nullptr;
 
-        auto file = std::fopen(path, "r");
+#ifdef _MSC_VER
+        if (fopen_s(&file, path.c_str(), "r"))
+            return std::unexpected(parse_error_t::read_file_error);
+#else 
+        file = fopen(path.c_str(), "r");
+#endif // _MSC_VER
+
         if (!file)
-            throw std::runtime_error{ "Open file failed." };
+            return std::unexpected(parse_error_t::read_file_error);
 
-        buffer.resize(buff_s, '\0');
-        while ((res = std::fread((void*)buffer.data(), 1, buffer.size(), file)) == buffer.size()) {
-            parser.set_buffer(buffer.data(), buffer.size() + buffer.data());
-            auto r = parser.parse();
-            if (r == _detail::_Parser::result::error)
-                throw std::runtime_error{ "Invalid format1." };
-            if (r != _detail::_Parser::result::buffer_end)
-                return parser.get_result();
-        }
-        if (std::feof(file)) {
-            parser.set_buffer(buffer.data(), res + buffer.data());
-            auto r = parser.parse();
-            if (r == _detail::_Parser::result::error)
-                throw std::runtime_error{ "Invalid format2." };
-            if (r != _detail::_Parser::result::buffer_end)
-                return parser.get_result();
-        }
-        throw std::runtime_error{ "Invalid format2." };
-    }
+        std::unique_ptr<FILE, std::function<void(FILE*)>> guard{ file, [ ](FILE* f)noexcept { ::fclose(f); } };
 
-    std::string to_json(const json::object& obj) {
-        _detail::_Serializer serializer;
-        serializer(obj);
-        return serializer.get_result();
+        while (true) {
+            auto n = ::fread(buffer.data(), 1, buffer.size(), file);
+            if (n < buffer.size()) {
+                if (::ferror(file))
+                    return std::unexpected(parse_error_t::read_file_error);
+                // EOF
+                if (n == 0) {
+                    return std::unexpected(parse_error_t::early_EOF);
+                }
+                auto err = lexer(buffer.data(), n);
+                if (err) {
+                    if (*err != parse_error_t::happy_ending)
+                        return std::unexpected(*err);
+                    // finish
+                    auto end = lexer.skip_space(buffer.data() + lexer.bytes, buffer.data() + n);
+                    if (end != buffer.data() + n) // extra content
+                    {
+                        return std::unexpected(parse_error_t::extra_content);
+                    }
+                    return builder.get();
+                }
+                // early EOF
+                return std::unexpected(parse_error_t::early_EOF);
+            }
+            // n == buffer.size()
+            auto err = lexer(buffer.data(), buffer.size());
+            if (err) {
+                if (*err == parse_error_t::happy_ending) {
+                    auto end = lexer.skip_space(buffer.data() + lexer.bytes, buffer.data() + buffer.size());
+                    if (end != buffer.data() + buffer.size()) // extra content
+                        return std::unexpected(parse_error_t::extra_content);
+                    break;
+                }
+                return std::unexpected(*err);
+            }
+        }
+
+        // May be have extra content
+        while (true) {
+            auto n = ::fread(buffer.data(), 1, buffer.size(), file);
+            if (n == 0)
+                return builder.get();
+            auto end = lexer.skip_space(buffer.data(), buffer.data() + n);
+            if (end != buffer.data() + n) // extra content
+                return std::unexpected(parse_error_t::extra_content);
+            if (n < buffer.size()) {
+                if (::ferror(file))
+                    return std::unexpected(parse_error_t::read_file_error);
+                // EOF
+                return builder.get();
+            }
+        }
+
+        std::unreachable();
     }
 
 }
-
-
-#endif
-
-
-
