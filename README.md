@@ -1,6 +1,6 @@
 # stl-json
 
-轻量级json解析器，使用C++23(gcc13、vs2022)，仅依赖标准库
+轻量级json解析器，使用C++23(gcc13、vs2022)，仅依赖标准库，支持ASCII、utf8，支持流式解析。
 
 核心数据结构 json::value, 能容纳
 

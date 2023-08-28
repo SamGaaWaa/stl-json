@@ -1,3 +1,24 @@
+/*
+  Copyright (c) 2023 SamGaaWaa
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in
+  all copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+  THE SOFTWARE.
+*/
 #pragma once
 
 #include <utility>
@@ -40,7 +61,9 @@ namespace json {
 
         early_EOF,
         read_file_error,
-        extra_content
+        extra_content,
+        too_deep,
+        duplicate_key
     };
 
     enum struct serialize_error_t : uint8_t {
@@ -76,6 +99,10 @@ namespace json {
                 return "Read file error.";
             case parse_error_t::extra_content:
                 return "Extra content.";
+            case parse_error_t::too_deep:
+                return "Too deep.";
+            case parse_error_t::duplicate_key:
+                return "Duplicate key.";
             default:
                 std::unreachable();
         }
@@ -133,9 +160,9 @@ namespace json {
     namespace detail {
         template<Parser P>
         struct lexer {
-            explicit lexer(P* p)noexcept :_parser{ p } {}
+            constexpr explicit lexer(P* p)noexcept :_parser{ p } {}
 
-            std::optional<parse_error_t> operator()(const char* data, const size_t size)noexcept {
+            constexpr std::optional<parse_error_t> operator()(const char* data, const size_t size)noexcept {
                 const char* iter = data;
                 const char* const end = iter + size;
                 std::optional<parse_error_t> err;
@@ -415,6 +442,7 @@ namespace json {
                                     const auto utf8 = unicode_to_utf8(unicode_high);
                                     for (const auto c : utf8)
                                         _parser->on_string(c);
+                                    unicode_high = 0;
                                     _state = state_t::after_quotation_mark;
                                     ++iter;
                                     continue;
@@ -986,53 +1014,58 @@ namespace json {
                     case '7':
                     case '8':
                     case '9':
-                        return uint8_t((c - '0') * 16);
+                        return uint32_t(c - '0');
                     case 'a':
                     case 'b':
                     case 'c':
                     case 'd':
                     case 'e':
                     case 'f':
-                        return uint8_t((c - 'a' + 10) * 16);
+                        return uint32_t(c - 'a' + 10);
                     case 'A':
                     case 'B':
                     case 'C':
                     case 'D':
                     case 'E':
                     case 'F':
-                        return uint8_t((c - 'A' + 10) * 16);
+                        return uint32_t(c - 'A' + 10);
                     default:
                         return std::nullopt;
                 }
             }
 
-            constexpr static std::string unicode_to_utf8(const uint32_t uc)noexcept {
-                std::string utf8;
+            constexpr static std::string_view unicode_to_utf8(const uint32_t uc)noexcept {
+                static char buf[4];
+                size_t n = 0;
 
                 if (uc <= 0x7F) {
                     // 单字节 UTF-8 编码
-                    utf8 += static_cast<char>(uc);
+                    n = 1;
+                    buf[0] = static_cast<char>(uc);
                 }
                 else if (uc <= 0x7FF) {
                     // 双字节 UTF-8 编码
-                    utf8 += static_cast<char>(0xC0 | (uc >> 6));
-                    utf8 += static_cast<char>(0x80 | (uc & 0x3F));
+                    n = 2;
+                    buf[0] = static_cast<char>(0xC0 | (uc >> 6));
+                    buf[1] = static_cast<char>(0x80 | (uc & 0x3F));
                 }
                 else if (uc <= 0xFFFF) {
                     // 三字节 UTF-8 编码
-                    utf8 += static_cast<char>(0xE0 | (uc >> 12));
-                    utf8 += static_cast<char>(0x80 | ((uc >> 6) & 0x3F));
-                    utf8 += static_cast<char>(0x80 | (uc & 0x3F));
+                    n = 3;
+                    buf[0] = static_cast<char>(0xE0 | (uc >> 12));
+                    buf[1] = static_cast<char>(0x80 | ((uc >> 6) & 0x3F));
+                    buf[2] = static_cast<char>(0x80 | (uc & 0x3F));
                 }
                 else if (uc <= 0x10FFFF) {
                     // 四字节 UTF-8 编码
-                    utf8 += static_cast<char>(0xF0 | (uc >> 18));
-                    utf8 += static_cast<char>(0x80 | ((uc >> 12) & 0x3F));
-                    utf8 += static_cast<char>(0x80 | ((uc >> 6) & 0x3F));
-                    utf8 += static_cast<char>(0x80 | (uc & 0x3F));
+                    n = 4;
+                    buf[0] = static_cast<char>(0xF0 | (uc >> 18));
+                    buf[1] = static_cast<char>(0x80 | ((uc >> 12) & 0x3F));
+                    buf[2] = static_cast<char>(0x80 | ((uc >> 6) & 0x3F));
+                    buf[3] = static_cast<char>(0x80 | (uc & 0x3F));
                 }
 
-                return utf8;
+                return { buf, n };
             }
 
             P* _parser;
@@ -1090,8 +1123,8 @@ namespace json {
             state_t _state = state_t::normal;
             uint8_t _hex = 0;
             size_t bytes = 0;
-            uint32_t unicode_high;
-            uint32_t unicode_low;
+            uint32_t unicode_high = 0;
+            uint32_t unicode_low = 0;
         };
 
         template<Builder B>
@@ -1214,36 +1247,22 @@ namespace json {
                 parsing_object,
 
                 parsing_A,
-                parsing_A_after_pair,
                 parsing_A_after_B,
 
                 parsing_B,
-                parsing_B_after_comma,
-                parsing_B_after_pair,
 
                 parsing_pair,
                 parsing_pair_after_string,
-                parsing_pair_after_colon,
-                parsing_pair_after_value,
 
                 parsing_array,
-                parsing_array_after_left_square_bracket,
-                parsing_array_after_C,
 
                 parsing_C,
-                parsing_C_after_elements,
 
                 parsing_elements,
-                parsing_elements_after_value,
-                parsing_elements_after_D,
 
                 parsing_D,
-                parsing_D_after_comma,
-                parsing_D_after_elements,
 
                 parsing_value,
-                parsing_value_after_object,
-                parsing_value_after_array,
             };
 
             struct parse_functor_base {
@@ -2000,7 +2019,7 @@ namespace json {
                 assert(!_stack.empty());
                 ++_depth;
                 if (_depth > _max_depth)
-                    return parse_error_t{};
+                    return parse_error_t::too_deep;
                 std::visit([this](auto s)noexcept {
                     if constexpr (std::is_same_v<json::document*, decltype(s)>) {
                         s->template emplace<json::object>();
@@ -2030,7 +2049,7 @@ namespace json {
                 assert(!_stack.empty());
                 ++_depth;
                 if (_depth > _max_depth)
-                    return parse_error_t{};
+                    return parse_error_t::too_deep;
                 std::visit([this](auto s)noexcept {
                     if constexpr (std::is_same_v<json::document*, decltype(s)>) {
                         s->template emplace<json::array>();
@@ -2061,7 +2080,7 @@ namespace json {
                 return std::visit([&, this](auto s)noexcept->std::optional<parse_error_t> {
                     if constexpr (std::is_same_v<json::object*, decltype(s)>) {
                         if (s->contains(key))
-                            return parse_error_t{};
+                            return parse_error_t::duplicate_key;
                         auto [iter, _] = s->emplace(std::move(key), json::value{});
                         _stack.emplace_back(iter);
                     }
@@ -2276,21 +2295,6 @@ namespace json {
             }
 
             private:
-            const char* char_to_hex(const char c)noexcept {
-                static char buf[3] = { 0, 0, 0 };
-                if (const uint8_t x = (uint8_t)c >> 4; x < 10) {
-                    buf[0] = '0' + x;
-                }
-                else buf[0] = 'a' + (x - 10);
-
-                if (const uint8_t x = (uint8_t)c & 0x0f; x < 10) {
-                    buf[1] = '0' + x;
-                }
-                else buf[1] = 'a' + (x - 10);
-
-                return buf;
-            }
-
             std::string js;
         };
     }
