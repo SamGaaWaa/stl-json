@@ -5,6 +5,8 @@
 #include <chrono>
 #include <filesystem>
 
+#include "cJSON.h"
+
 
 std::string read_file(const std::string& path)noexcept {
     std::ifstream file(path);
@@ -113,23 +115,32 @@ void make_big_file() {
 }
 
 void benchmark_from_file() {
+    std::cout << "Benchmark from_file...\n";
+
     auto path = R"(./test/json/big.json)";
+    const auto js = read_file(path);
+    std::cout << js.size() << '\n';
 
     const int n = 100;
 
     auto size = 0;
     auto start = std::chrono::steady_clock::now();
     for (int i = 0; i < n; ++i) {
-        auto dom = json::from_file(path, 4096 * 4, 100);
+        auto dom = json::from_file(path, 4096, 100);
         if (dom and std::holds_alternative<json::array>(*dom))
             size += std::get<json::array>(*dom).size();
     }
     auto end = std::chrono::steady_clock::now();
 
-    std::cout << std::format("Result is {}. Takes {}s per parsing.\n", size, std::chrono::duration<double>(end - start).count() / n);
+    std::cout << std::format("result:{}\n", size);
+
+    double per_parsing = std::chrono::duration<double>(end - start).count() / n;
+    std::cout << std::format("{} MB/s\n\n", (js.size() >> 20) / per_parsing);
 }
 
 void benchmark_parse() {
+    std::cout << "Benchmark parse...\n";
+
     auto path = R"(./test/json/big.json)";
     const auto js = read_file(path);
     std::cout << js.size() << '\n';
@@ -145,7 +156,60 @@ void benchmark_parse() {
     }
     auto end = std::chrono::steady_clock::now();
 
-    std::cout << std::format("Result is {}. Takes {}s per parsing.\n", size, std::chrono::duration<double>(end - start).count() / n);
+    std::cout << std::format("result:{}\n", size);
+
+    double per_parsing = std::chrono::duration<double>(end - start).count() / n;
+    std::cout << std::format("{} MB/s\n\n", (js.size() >> 20) / per_parsing);
+}
+
+void benchmark_cJSON_parse() {
+    std::cout << "Benchmark cJSON parse...\n";
+
+    auto path = R"(./test/json/big.json)";
+    const auto js = read_file(path);
+    std::cout << js.size() << '\n';
+
+    const int n = 100;
+
+    auto size = 0;
+    auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < n; ++i) {
+        auto dom = cJSON_Parse(js.data());
+        if (dom and dom->type == cJSON_Array) {
+            size += cJSON_GetArraySize(dom);
+        }
+        cJSON_Delete(dom);
+    }
+    auto end = std::chrono::steady_clock::now();
+
+    std::cout << std::format("result:{}\n", size);
+
+    double per_parsing = std::chrono::duration<double>(end - start).count() / n;
+    std::cout << std::format("{} MB/s\n\n", (js.size() >> 20) / per_parsing);
+}
+
+void benchmark_pure_parse() {
+    std::cout << "Benchmark pure parse...\n";
+
+    auto path = R"(./test/json/big.json)";
+    const auto js = read_file(path);
+    std::cout << js.size() << '\n';
+
+    const int n = 100;
+
+    auto size = 0;
+    auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < n; ++i) {
+        auto dom = json::parse<json::detail::document_printer>(js.data(), js.size(), 100);
+        if (dom)
+            size += *dom;
+    }
+    auto end = std::chrono::steady_clock::now();
+
+    std::cout << std::format("result:{}\n", size);
+
+    double per_parsing = std::chrono::duration<double>(end - start).count() / n;
+    std::cout << std::format("{} MB/s\n\n", (js.size() >> 20) / per_parsing);
 }
 
 int main() {
@@ -155,5 +219,7 @@ int main() {
     make_big_file();
     benchmark_from_file();
     benchmark_parse();
+    benchmark_cJSON_parse();
+    benchmark_pure_parse();
     return 0;
 }

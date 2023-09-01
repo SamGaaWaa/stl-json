@@ -109,7 +109,7 @@ namespace json {
         std::unreachable();
     }
 
-    const char* error_string(const serialize_error_t err)noexcept {
+    constexpr const char* error_string(const serialize_error_t err)noexcept {
         switch (err) {
             case serialize_error_t::error:
                 return "Error.";
@@ -122,11 +122,11 @@ namespace json {
     }
 
     template<class P>
-    concept Parser = requires(P p, char c) {
+    concept Parser = requires(P p, char c, const char* data, size_t size) {
         { p.on_null() }->std::same_as<std::optional<parse_error_t>>;
         { p.on_true() }->std::same_as<std::optional<parse_error_t>>;
         { p.on_false() }->std::same_as<std::optional<parse_error_t>>;
-        { p.on_string(c) }->std::same_as<std::optional<parse_error_t>>;
+        { p.on_string(data, size) }->std::same_as<std::optional<parse_error_t>>;
         { p.on_string_begin() }->std::same_as<std::optional<parse_error_t>>;
         { p.on_string_end() }->std::same_as<std::optional<parse_error_t>>;
         { p.on_comma() }->std::same_as<std::optional<parse_error_t>>;
@@ -155,7 +155,6 @@ namespace json {
         { b.on_null() }->std::same_as<std::optional<parse_error_t>>;
         { b.get() };
     };
-
 
     namespace detail {
         template<Parser P>
@@ -293,279 +292,28 @@ namespace json {
 
                             // string
                         case state_t::after_quotation_mark:
-                            {
-                                const char c = *iter;
-                                switch (std::countl_one((uint8_t)c)) {
-                                    case 0:
-                                        {   //ASCII
-                                            if (std::iscntrl(c))
-                                                return parse_error_t{};
-                                            switch (c) {
-                                                case '\"':
-                                                    err = _parser->on_string_end();
-                                                    if (err) {
-                                                        bytes += iter - data + 1;
-                                                        return err;
-                                                    }
-                                                    _state = state_t::normal;
-                                                    ++iter;
-                                                    continue;
-                                                case '\\':
-                                                    _state = state_t::after_reverse_solidus;
-                                                    ++iter;
-                                                    continue;
-                                                default:
-                                                    _parser->on_string(c);
-                                                    ++iter;
-                                                    continue;
-                                            }
-                                        }
-                                    case 1:
-                                        return parse_error_t::unknown_string_character;
-                                    case 2:
-                                        _parser->on_string(c);
-                                        _state = state_t::wait_1_utf8_bytes;
-                                        ++iter;
-                                        continue;
-                                    case 3:
-                                        _parser->on_string(c);
-                                        _state = state_t::wait_2_utf8_bytes;
-                                        ++iter;
-                                        continue;
-                                    case 4:
-                                        _parser->on_string(c);
-                                        _state = state_t::wait_3_utf8_bytes;
-                                        ++iter;
-                                        continue;
-                                    default:
-                                        bytes += iter - data + 1;
-                                        return parse_error_t::unknown_string_character;
-                                }
-                            }
                         case state_t::after_reverse_solidus:
-                            {
-                                const char c = *iter;
-                                switch (c) {
-                                    case '\"':
-                                    case '\\':
-                                    case '/':
-                                        _parser->on_string(c);
-                                        _state = state_t::after_quotation_mark;
-                                        ++iter;
-                                        continue;
-                                    case 'b':
-                                        _parser->on_string('\b');
-                                        _state = state_t::after_quotation_mark;
-                                        ++iter;
-                                        continue;
-                                    case 'f':
-                                        _parser->on_string('\f');
-                                        _state = state_t::after_quotation_mark;
-                                        ++iter;
-                                        continue;
-                                    case 'n':
-                                        _parser->on_string('\n');
-                                        _state = state_t::after_quotation_mark;
-                                        ++iter;
-                                        continue;
-                                    case 'r':
-                                        _parser->on_string('\r');
-                                        _state = state_t::after_quotation_mark;
-                                        ++iter;
-                                        continue;
-                                    case 't':
-                                        _parser->on_string('\t');
-                                        _state = state_t::after_quotation_mark;
-                                        ++iter;
-                                        continue;
-                                    case 'u':
-                                        _state = state_t::wait_4_hex;
-                                        ++iter;
-                                        continue;
-                                    default:
-                                        bytes += iter - data + 1;
-                                        return parse_error_t::unknown_ESC;
-                                }
-                            }
                         case state_t::wait_4_hex:
-                            {
-                                const char c = *iter;
-                                if (auto op = hex_to_int(c); op) {
-                                    unicode_high |= ((*op) << 12);
-                                    _state = state_t::wait_3_hex;
-                                    ++iter;
-                                    continue;
-                                }
-                                else {
-                                    bytes += iter - data + 1;
-                                    return parse_error_t::unknown_hex_character;
-                                }
-                            }
                         case state_t::wait_3_hex:
-                            {
-                                const char c = *iter;
-                                if (auto op = hex_to_int(c); op) {
-                                    unicode_high |= ((*op) << 8);
-                                    _state = state_t::wait_2_hex;
-                                    ++iter;
-                                    continue;
-                                }
-                                else {
-                                    bytes += iter - data + 1;
-                                    return parse_error_t::unknown_hex_character;
-                                }
-                            }
                         case state_t::wait_2_hex:
-                            {
-                                const char c = *iter;
-                                if (auto op = hex_to_int(c); op) {
-                                    unicode_high |= ((*op) << 4);
-                                    _state = state_t::wait_1_hex;
-                                    ++iter;
-                                    continue;
-                                }
-                                else {
-                                    bytes += iter - data + 1;
-                                    return parse_error_t::unknown_hex_character;
-                                }
-                            }
                         case state_t::wait_1_hex:
-                            {
-                                const char c = *iter;
-                                if (auto op = hex_to_int(c); op) {
-                                    unicode_high |= *op;
-                                    if (unicode_high >= 0xD800 && unicode_high <= 0xDBFF) {
-                                        _state = state_t::wait_low_reverse_solidus;
-                                        ++iter;
-                                        continue;
-                                    }
-                                    const auto utf8 = unicode_to_utf8(unicode_high);
-                                    for (const auto c : utf8)
-                                        _parser->on_string(c);
-                                    unicode_high = 0;
-                                    _state = state_t::after_quotation_mark;
-                                    ++iter;
-                                    continue;
-                                }
-                                else {
-                                    bytes += iter - data + 1;
-                                    return parse_error_t::unknown_hex_character;
-                                }
-                            }
                         case state_t::wait_low_reverse_solidus:
-                            {
-                                const char c = *iter;
-                                if (c == '\\') {
-                                    _state = state_t::wait_low_u;
-                                    ++iter;
-                                    continue;
-                                }
-                                else {
-                                    bytes += iter - data + 1;
-                                    return parse_error_t::unknown_hex_character;
-                                }
-                            }
                         case state_t::wait_low_u:
-                            {
-                                const char c = *iter;
-                                if (c == 'u') {
-                                    _state = state_t::wait_low_4_hex;
-                                    ++iter;
-                                    continue;
-                                }
-                                else {
-                                    bytes += iter - data + 1;
-                                    return parse_error_t::unknown_hex_character;
-                                }
-                            }
                         case state_t::wait_low_4_hex:
-                            {
-                                const char c = *iter;
-                                if (auto op = hex_to_int(c); op) {
-                                    unicode_low |= ((*op) << 12);
-                                    _state = state_t::wait_low_3_hex;
-                                    ++iter;
-                                    continue;
-                                }
-                                else {
-                                    bytes += iter - data + 1;
-                                    return parse_error_t::unknown_hex_character;
-                                }
-                            }
                         case state_t::wait_low_3_hex:
-                            {
-                                const char c = *iter;
-                                if (auto op = hex_to_int(c); op) {
-                                    unicode_low |= ((*op) << 8);
-                                    _state = state_t::wait_low_2_hex;
-                                    ++iter;
-                                    continue;
-                                }
-                                else {
-                                    bytes += iter - data + 1;
-                                    return parse_error_t::unknown_hex_character;
-                                }
-                            }
                         case state_t::wait_low_2_hex:
-                            {
-                                const char c = *iter;
-                                if (auto op = hex_to_int(c); op) {
-                                    unicode_low |= ((*op) << 4);
-                                    _state = state_t::wait_low_1_hex;
-                                    ++iter;
-                                    continue;
-                                }
-                                else {
-                                    bytes += iter - data + 1;
-                                    return parse_error_t::unknown_hex_character;
-                                }
-                            }
                         case state_t::wait_low_1_hex:
-                            {
-                                const char c = *iter;
-                                if (auto op = hex_to_int(c); op) {
-                                    unicode_low |= *op;
-                                    const uint32_t uc = 0x10000 + ((unicode_high - 0xD800) << 10) + (unicode_low - 0xDC00);
-                                    const auto utf8 = unicode_to_utf8(uc);
-                                    for (const auto c : utf8)
-                                        _parser->on_string(c);
-                                    unicode_high = unicode_low = 0;
-                                    _state = state_t::after_quotation_mark;
-                                    ++iter;
-                                    continue;
-                                }
-                                else {
-                                    bytes += iter - data + 1;
-                                    return parse_error_t::unknown_hex_character;
-                                }
-                            }
                         case state_t::wait_3_utf8_bytes:
-                            if (std::countl_one((uint8_t)*iter) != 1) {
-                                bytes += iter - data + 1;
-                                return parse_error_t::unknown_utf8_bytes;
-                            }
-                            _parser->on_string(*iter);
-                            _state = state_t::wait_2_utf8_bytes;
-                            ++iter;
-                            continue;
                         case state_t::wait_2_utf8_bytes:
-                            if (std::countl_one((uint8_t)*iter) != 1) {
-                                bytes += iter - data + 1;
-                                return parse_error_t::unknown_utf8_bytes;
-                            }
-                            _parser->on_string(*iter);
-                            _state = state_t::wait_1_utf8_bytes;
-                            ++iter;
-                            continue;
                         case state_t::wait_1_utf8_bytes:
-                            if (std::countl_one((uint8_t)*iter) != 1) {
-                                bytes += iter - data + 1;
-                                return parse_error_t::unknown_utf8_bytes;
+                            {
+                                iter = _parse_string(iter, end, err);
+                                if (err) {
+                                    bytes += iter - data;
+                                    return err;
+                                }
+                                continue;
                             }
-                            _parser->on_string(*iter);
-                            _state = state_t::after_quotation_mark;
-                            ++iter;
-                            continue;
 
                             // number
                         case state_t::after_optional_negative:
@@ -989,6 +737,7 @@ namespace json {
                     case '\n':
                     case '\t':
                     case '\r':
+                    case '\0':
                         return true;
                     default:
                         return false;
@@ -1125,113 +874,392 @@ namespace json {
             size_t bytes = 0;
             uint32_t unicode_high = 0;
             uint32_t unicode_low = 0;
+
+            private:
+            const char* _parse_string(const char* const data, const char* const end, std::optional<parse_error_t>& err)noexcept {
+                const char* iter = data;
+                const char* start = data;
+                while (iter < end) {
+                    switch (_state) {
+                        case state_t::after_quotation_mark:
+                            {
+                                const char c = *iter;
+                                switch (std::countl_one((uint8_t)c)) {
+                                    case 0:
+                                        {   //ASCII
+                                            if (std::iscntrl(c)) {
+                                                err = parse_error_t::unknown_string_character;
+                                                return iter + 1;
+                                            }
+                                            switch (c) {
+                                                case '\"':
+                                                    if (start < iter) {
+                                                        _parser->on_string(start, iter - start);
+                                                    }
+                                                    _parser->on_string_end();
+                                                    _state = state_t::normal;
+                                                    return iter + 1;
+                                                case '\\':
+                                                    _parser->on_string(start, iter - start);
+                                                    _state = state_t::after_reverse_solidus;
+                                                    ++iter;
+                                                    continue;
+                                                default:
+                                                    ++iter;
+                                                    continue;
+                                            }
+                                        }
+                                    case 1:
+                                        {
+                                            err = parse_error_t::unknown_string_character;
+                                            return iter + 1;
+                                        }
+                                    case 2:
+                                        _state = state_t::wait_1_utf8_bytes;
+                                        ++iter;
+                                        continue;
+                                    case 3:
+                                        _state = state_t::wait_2_utf8_bytes;
+                                        ++iter;
+                                        continue;
+                                    case 4:
+                                        _state = state_t::wait_3_utf8_bytes;
+                                        ++iter;
+                                        continue;
+                                    default:
+                                        err = parse_error_t::unknown_string_character;
+                                        return iter + 1;
+                                }
+                            }
+                        case state_t::after_reverse_solidus:
+                            {
+                                const char c = *iter;
+                                switch (c) {
+                                    case '\"':
+                                    case '\\':
+                                    case '/':
+                                        _parser->on_string(&c, 1);
+                                        _state = state_t::after_quotation_mark;
+                                        start = ++iter;
+                                        continue;
+                                    case 'b':
+                                        _parser->on_string("\b", 1);
+                                        _state = state_t::after_quotation_mark;
+                                        start = ++iter;
+                                        continue;
+                                    case 'f':
+                                        _parser->on_string("\f", 1);
+                                        _state = state_t::after_quotation_mark;
+                                        start = ++iter;
+                                        continue;
+                                    case 'n':
+                                        _parser->on_string("\n", 1);
+                                        _state = state_t::after_quotation_mark;
+                                        start = ++iter;
+                                        continue;
+                                    case 'r':
+                                        _parser->on_string("\r", 1);
+                                        _state = state_t::after_quotation_mark;
+                                        start = ++iter;
+                                        continue;
+                                    case 't':
+                                        _parser->on_string("\t", 1);
+                                        _state = state_t::after_quotation_mark;
+                                        start = ++iter;
+                                        continue;
+                                    case 'u':
+                                        _state = state_t::wait_4_hex;
+                                        ++iter;
+                                        continue;
+                                    default:
+                                        err = parse_error_t::unknown_ESC;
+                                        return iter + 1;
+                                }
+                            }
+                        case state_t::wait_4_hex:
+                            {
+                                const char c = *iter;
+                                if (auto op = hex_to_int(c); op) {
+                                    unicode_high |= ((*op) << 12);
+                                    _state = state_t::wait_3_hex;
+                                    ++iter;
+                                    continue;
+                                }
+                                else {
+                                    err = parse_error_t::unknown_hex_character;
+                                    return iter + 1;
+                                }
+                            }
+                        case state_t::wait_3_hex:
+                            {
+                                const char c = *iter;
+                                if (auto op = hex_to_int(c); op) {
+                                    unicode_high |= ((*op) << 8);
+                                    _state = state_t::wait_2_hex;
+                                    ++iter;
+                                    continue;
+                                }
+                                else {
+                                    err = parse_error_t::unknown_hex_character;
+                                    return iter + 1;
+                                }
+                            }
+                        case state_t::wait_2_hex:
+                            {
+                                const char c = *iter;
+                                if (auto op = hex_to_int(c); op) {
+                                    unicode_high |= ((*op) << 4);
+                                    _state = state_t::wait_1_hex;
+                                    ++iter;
+                                    continue;
+                                }
+                                else {
+                                    err = parse_error_t::unknown_hex_character;
+                                    return iter + 1;
+                                }
+                            }
+                        case state_t::wait_1_hex:
+                            {
+                                const char c = *iter;
+                                if (auto op = hex_to_int(c); op) {
+                                    unicode_high |= *op;
+                                    if (unicode_high >= 0xD800 && unicode_high <= 0xDBFF) {
+                                        _state = state_t::wait_low_reverse_solidus;
+                                        ++iter;
+                                        continue;
+                                    }
+                                    const auto utf8 = unicode_to_utf8(unicode_high);
+                                    _parser->on_string(utf8.data(), utf8.size());
+                                    unicode_high = 0;
+                                    _state = state_t::after_quotation_mark;
+                                    start = ++iter;
+                                    continue;
+                                }
+                                else {
+                                    err = parse_error_t::unknown_hex_character;
+                                    return iter + 1;
+                                }
+                            }
+                        case state_t::wait_low_reverse_solidus:
+                            {
+                                const char c = *iter;
+                                if (c == '\\') {
+                                    _state = state_t::wait_low_u;
+                                    ++iter;
+                                    continue;
+                                }
+                                else {
+                                    err = parse_error_t::unknown_hex_character;
+                                    return iter + 1;
+                                }
+                            }
+                        case state_t::wait_low_u:
+                            {
+                                const char c = *iter;
+                                if (c == 'u') {
+                                    _state = state_t::wait_low_4_hex;
+                                    ++iter;
+                                    continue;
+                                }
+                                else {
+                                    err = parse_error_t::unknown_hex_character;
+                                    return iter + 1;
+                                }
+                            }
+                        case state_t::wait_low_4_hex:
+                            {
+                                const char c = *iter;
+                                if (auto op = hex_to_int(c); op) {
+                                    unicode_low |= ((*op) << 12);
+                                    _state = state_t::wait_low_3_hex;
+                                    ++iter;
+                                    continue;
+                                }
+                                else {
+                                    err = parse_error_t::unknown_hex_character;
+                                    return iter + 1;
+                                }
+                            }
+                        case state_t::wait_low_3_hex:
+                            {
+                                const char c = *iter;
+                                if (auto op = hex_to_int(c); op) {
+                                    unicode_low |= ((*op) << 8);
+                                    _state = state_t::wait_low_2_hex;
+                                    ++iter;
+                                    continue;
+                                }
+                                else {
+                                    err = parse_error_t::unknown_hex_character;
+                                    return iter + 1;
+                                }
+                            }
+                        case state_t::wait_low_2_hex:
+                            {
+                                const char c = *iter;
+                                if (auto op = hex_to_int(c); op) {
+                                    unicode_low |= ((*op) << 4);
+                                    _state = state_t::wait_low_1_hex;
+                                    ++iter;
+                                    continue;
+                                }
+                                else {
+                                    err = parse_error_t::unknown_hex_character;
+                                    return iter + 1;
+                                }
+                            }
+                        case state_t::wait_low_1_hex:
+                            {
+                                const char c = *iter;
+                                if (auto op = hex_to_int(c); op) {
+                                    unicode_low |= *op;
+                                    const uint32_t uc = 0x10000 + ((unicode_high - 0xD800) << 10) + (unicode_low - 0xDC00);
+                                    const auto utf8 = unicode_to_utf8(uc);
+                                    _parser->on_string(utf8.data(), utf8.size());
+                                    unicode_high = unicode_low = 0;
+                                    _state = state_t::after_quotation_mark;
+                                    start = ++iter;
+                                    continue;
+                                }
+                                else {
+                                    err = parse_error_t::unknown_hex_character;
+                                    return iter + 1;
+                                }
+                            }
+                        case state_t::wait_3_utf8_bytes:
+                            _state = state_t::wait_2_utf8_bytes;
+                            start = ++iter;
+                            continue;
+                        case state_t::wait_2_utf8_bytes:
+                            _state = state_t::wait_1_utf8_bytes;
+                            start = ++iter;
+                            continue;
+                        case state_t::wait_1_utf8_bytes:
+                            _state = state_t::after_quotation_mark;
+                            start = ++iter;
+                            continue;
+                        default:
+                            std::unreachable();
+                    }
+                }
+                if (start < iter) {
+                    switch (_state) {
+                        case state_t::after_quotation_mark:
+                        case state_t::wait_3_utf8_bytes:
+                        case state_t::wait_2_utf8_bytes:
+                        case state_t::wait_1_utf8_bytes:
+                            _parser->on_string(start, iter - start);
+                    }
+                }
+                return iter;
+            }
         };
 
         template<Builder B>
         struct parser {
-            explicit parser(B* b) :builder{ b } {
+            constexpr explicit parser(B* b) :builder{ b } {
                 _stack.emplace_back(json_parser{ {}, state_t{}, this });
             }
 
-            std::optional<parse_error_t> on_null()noexcept {
+            constexpr std::optional<parse_error_t> on_null()noexcept {
                 assert(!_stack.empty());
                 return std::visit([ ](auto& p) {
                     return p.on_null();
                     }, _stack.back());
             }
 
-            std::optional<parse_error_t> on_true()noexcept {
+            constexpr std::optional<parse_error_t> on_true()noexcept {
                 assert(!_stack.empty());
                 return std::visit([ ](auto& p) {
                     return p.on_true();
                     }, _stack.back());
             }
 
-            std::optional<parse_error_t> on_false()noexcept {
+            constexpr std::optional<parse_error_t> on_false()noexcept {
                 assert(!_stack.empty());
                 return std::visit([ ](auto& p) {
                     return p.on_false();
                     }, _stack.back());
             }
 
-            std::optional<parse_error_t> on_string(const char c)noexcept {
+            constexpr std::optional<parse_error_t> on_string(const char* data, size_t size)noexcept {
                 assert(!_stack.empty());
                 return std::visit([=](auto& p) {
-                    return p.on_string(c);
+                    return p.on_string(data, size);
                     }, _stack.back());
             }
 
-            std::optional<parse_error_t> on_string_begin()noexcept {
+            constexpr std::optional<parse_error_t> on_string_begin()noexcept {
                 assert(!_stack.empty());
                 return std::visit([ ](auto& p) {
                     return p.on_string_begin();
                     }, _stack.back());
             }
 
-            std::optional<parse_error_t> on_string_end()noexcept {
+            constexpr std::optional<parse_error_t> on_string_end()noexcept {
                 assert(!_stack.empty());
                 return std::visit([ ](auto& p) {
                     return p.on_string_end();
                     }, _stack.back());
             }
 
-            std::optional<parse_error_t> on_comma()noexcept {
+            constexpr std::optional<parse_error_t> on_comma()noexcept {
                 assert(!_stack.empty());
                 return std::visit([ ](auto& p) {
                     return p.on_comma();
                     }, _stack.back());
             }
 
-            std::optional<parse_error_t> on_colon()noexcept {
+            constexpr std::optional<parse_error_t> on_colon()noexcept {
                 assert(!_stack.empty());
                 return std::visit([ ](auto& p) {
                     return p.on_colon();
                     }, _stack.back());
             }
 
-            std::optional<parse_error_t> on_number(const char c)noexcept {
+            constexpr std::optional<parse_error_t> on_number(const char c)noexcept {
                 assert(!_stack.empty());
                 return std::visit([=](auto& p) {
                     return p.on_number(c);
                     }, _stack.back());
             }
 
-            std::optional<parse_error_t> on_number_begin(const char c)noexcept {
+            constexpr std::optional<parse_error_t> on_number_begin(const char c)noexcept {
                 assert(!_stack.empty());
                 return std::visit([=](auto& p) {
                     return p.on_number_begin(c);
                     }, _stack.back());
             }
 
-            std::optional<parse_error_t> on_number_end()noexcept {
+            constexpr std::optional<parse_error_t> on_number_end()noexcept {
                 assert(!_stack.empty());
                 return std::visit([ ](auto& p) {
                     return p.on_number_end();
                     }, _stack.back());
             }
 
-            std::optional<parse_error_t> on_left_square_bracket()noexcept {
+            constexpr std::optional<parse_error_t> on_left_square_bracket()noexcept {
                 assert(!_stack.empty());
                 return std::visit([ ](auto& p) {
                     return p.on_left_square_bracket();
                     }, _stack.back());
             }
 
-            std::optional<parse_error_t> on_right_square_bracket()noexcept {
+            constexpr std::optional<parse_error_t> on_right_square_bracket()noexcept {
                 assert(!_stack.empty());
                 return std::visit([ ](auto& p) {
                     return p.on_right_square_bracket();
                     }, _stack.back());
             }
 
-            std::optional<parse_error_t> on_left_brace()noexcept {
+            constexpr std::optional<parse_error_t> on_left_brace()noexcept {
                 assert(!_stack.empty());
                 return std::visit([ ](auto& p) {
                     return p.on_left_brace();
                     }, _stack.back());
             }
 
-            std::optional<parse_error_t> on_right_brace()noexcept {
+            constexpr std::optional<parse_error_t> on_right_brace()noexcept {
                 assert(!_stack.empty());
                 return std::visit([ ](auto& p) {
                     return p.on_right_brace();
@@ -1266,84 +1294,84 @@ namespace json {
             };
 
             struct parse_functor_base {
-                std::optional<parse_error_t> on_null()noexcept {
+                constexpr std::optional<parse_error_t> on_null()noexcept {
                     return parse_error_t{};
                 }
 
-                std::optional<parse_error_t> on_true()noexcept {
+                constexpr std::optional<parse_error_t> on_true()noexcept {
                     return parse_error_t{};
                 }
 
-                std::optional<parse_error_t> on_false()noexcept {
+                constexpr std::optional<parse_error_t> on_false()noexcept {
                     return parse_error_t{};
                 }
 
-                std::optional<parse_error_t> on_string(const char c)noexcept {
+                constexpr std::optional<parse_error_t> on_string(const char* data, size_t size)noexcept {
                     return parse_error_t{};
                 }
 
-                std::optional<parse_error_t> on_string_begin()noexcept {
+                constexpr std::optional<parse_error_t> on_string_begin()noexcept {
                     return parse_error_t{};
                 }
 
-                std::optional<parse_error_t> on_string_end()noexcept {
+                constexpr std::optional<parse_error_t> on_string_end()noexcept {
                     return parse_error_t{};
                 }
 
-                std::optional<parse_error_t> on_comma()noexcept {
+                constexpr std::optional<parse_error_t> on_comma()noexcept {
                     return parse_error_t{};
                 }
 
-                std::optional<parse_error_t> on_colon()noexcept {
+                constexpr std::optional<parse_error_t> on_colon()noexcept {
                     return parse_error_t{};
                 }
 
-                std::optional<parse_error_t> on_number(const char c)noexcept {
+                constexpr std::optional<parse_error_t> on_number(const char c)noexcept {
                     return parse_error_t{};
                 }
 
-                std::optional<parse_error_t> on_number_begin(const char c)noexcept {
+                constexpr std::optional<parse_error_t> on_number_begin(const char c)noexcept {
                     return parse_error_t{};
                 }
 
-                std::optional<parse_error_t> on_number_end()noexcept {
+                constexpr std::optional<parse_error_t> on_number_end()noexcept {
                     return parse_error_t{};
                 }
 
-                std::optional<parse_error_t> on_left_square_bracket()noexcept {
+                constexpr std::optional<parse_error_t> on_left_square_bracket()noexcept {
                     return parse_error_t{};
                 }
 
-                std::optional<parse_error_t> on_right_square_bracket()noexcept {
+                constexpr std::optional<parse_error_t> on_right_square_bracket()noexcept {
                     return parse_error_t{};
                 }
 
-                std::optional<parse_error_t> on_left_brace()noexcept {
+                constexpr std::optional<parse_error_t> on_left_brace()noexcept {
                     return parse_error_t{};
                 }
 
-                std::optional<parse_error_t> on_right_brace()noexcept {
+                constexpr std::optional<parse_error_t> on_right_brace()noexcept {
                     return parse_error_t{};
                 }
             };
 
             struct json_parser : parse_functor_base {
-                std::optional<parse_error_t> on_left_brace()noexcept {
+                constexpr std::optional<parse_error_t> on_left_brace()noexcept {
                     auto p = parent;
                     auto err = p->builder->on_document_begin();
                     if (err)
                         return err;
                     p->_stack.back() = object_parser{ {}, state_t::parsing_object, p };
-                    return p->on_left_brace();
+                    return std::get<object_parser>(p->_stack.back()).on_left_brace();
                 }
 
-                std::optional<parse_error_t> on_left_square_bracket()noexcept {
+                constexpr std::optional<parse_error_t> on_left_square_bracket()noexcept {
                     auto p = parent;
                     auto err = p->builder->on_document_begin();
                     if (err)
                         return err;
                     p->_stack.back() = array_parser{ {}, state_t::parsing_array, p };
-                    return p->on_left_square_bracket();
+                    return std::get<array_parser>(p->_stack.back()).on_left_square_bracket();
                 }
 
                 state_t state;
@@ -1351,7 +1379,7 @@ namespace json {
             };
 
             struct object_parser : parse_functor_base {
-                std::optional<parse_error_t> on_left_brace()noexcept {
+                constexpr std::optional<parse_error_t> on_left_brace()noexcept {
                     auto err = parent->builder->on_object_begin();
                     auto p = parent;
                     p->_stack.back() = A_parser{ {}, state_t::parsing_A, p };
@@ -1363,7 +1391,7 @@ namespace json {
             };
 
             struct A_parser : parse_functor_base {
-                std::optional<parse_error_t> on_right_brace()noexcept {
+                constexpr std::optional<parse_error_t> on_right_brace()noexcept {
                     if (state == state_t::parsing_A or state == state_t::parsing_A_after_B) {
                         auto p = parent;
                         auto err = p->builder->on_object_end();
@@ -1379,13 +1407,13 @@ namespace json {
                     return parse_error_t{};
                 }
 
-                std::optional<parse_error_t> on_string_begin()noexcept {
+                constexpr std::optional<parse_error_t> on_string_begin()noexcept {
                     if (state == state_t::parsing_A) {
                         state = state_t::parsing_A_after_B;
                         auto p = parent;
                         p->_stack.emplace_back(B_parser{ {}, state_t::parsing_B, p });
                         p->_stack.emplace_back(pair_parser{ {}, state_t::parsing_pair, p });
-                        return p->on_string_begin();
+                        return std::get<pair_parser>(p->_stack.back()).on_string_begin();
                     }
                     return parse_error_t{};
                 }
@@ -1395,17 +1423,16 @@ namespace json {
             };
 
             struct B_parser : parse_functor_base {
-                std::optional<parse_error_t> on_right_brace()noexcept {
+                constexpr std::optional<parse_error_t> on_right_brace()noexcept {
                     if (state == state_t::parsing_B) {
                         auto p = parent;
                         p->_stack.pop_back();
-                        assert(!p->_stack.empty());
                         return p->on_right_brace();
                     }
                     return parse_error_t{};
                 }
 
-                std::optional<parse_error_t> on_comma()noexcept {
+                constexpr std::optional<parse_error_t> on_comma()noexcept {
                     auto p = parent;
                     p->_stack.emplace_back(pair_parser{ {}, state_t::parsing_pair,p });
                     return {};
@@ -1416,26 +1443,26 @@ namespace json {
             };
 
             struct pair_parser : parse_functor_base {
-                std::optional<parse_error_t> on_string_begin()noexcept {
+                constexpr std::optional<parse_error_t> on_string_begin()noexcept {
                     if (state == state_t::parsing_pair) {
                         return {};
                     }
                     return parse_error_t{};
                 }
 
-                std::optional<parse_error_t> on_string(const char c)noexcept {
-                    key.push_back(c);
+                constexpr std::optional<parse_error_t> on_string(const char* data, size_t size)noexcept {
+                    key.append(data, size);
                     return {};
                 }
 
-                std::optional<parse_error_t> on_string_end()noexcept {
+                constexpr std::optional<parse_error_t> on_string_end()noexcept {
                     std::string str;
                     str.swap(key);
                     state = state_t::parsing_pair_after_string;
                     return parent->builder->on_key(std::move(str));
                 }
 
-                std::optional<parse_error_t> on_colon()noexcept {
+                constexpr std::optional<parse_error_t> on_colon()noexcept {
                     if (state == state_t::parsing_pair_after_string) {
                         auto p = parent;
                         p->_stack.back() = value_parser{ {}, state_t::parsing_value, p };
@@ -1450,29 +1477,29 @@ namespace json {
             };
 
             struct value_parser : parse_functor_base {
-                std::optional<parse_error_t> on_left_brace()noexcept {
+                constexpr std::optional<parse_error_t> on_left_brace()noexcept {
                     auto p = parent;
                     p->_stack.back() = object_parser{ {}, state_t::parsing_object, p };
-                    return p->on_left_brace();
+                    return std::get<object_parser>(p->_stack.back()).on_left_brace();
                 }
 
-                std::optional<parse_error_t> on_left_square_bracket()noexcept {
+                constexpr std::optional<parse_error_t> on_left_square_bracket()noexcept {
                     auto p = parent;
                     p->_stack.back() = array_parser{ {}, state_t::parsing_array, p };
-                    return p->on_left_square_bracket();
+                    return std::get<array_parser>(p->_stack.back()).on_left_square_bracket();
                 }
 
-                std::optional<parse_error_t> on_number(const char c)noexcept {
+                constexpr std::optional<parse_error_t> on_number(const char c)noexcept {
                     str.push_back(c);
                     return {};
                 }
 
-                std::optional<parse_error_t> on_number_begin(const char c)noexcept {
+                constexpr std::optional<parse_error_t> on_number_begin(const char c)noexcept {
                     str.push_back(c);
                     return {};
                 }
 
-                std::optional<parse_error_t> on_number_end()noexcept {
+                constexpr std::optional<parse_error_t> on_number_end()noexcept {
                     std::string num;
                     str.swap(num);
                     auto err = parent->builder->on_number(std::move(num));
@@ -1480,28 +1507,28 @@ namespace json {
                     return err;
                 }
 
-                std::optional<parse_error_t> on_true()noexcept {
+                constexpr std::optional<parse_error_t> on_true()noexcept {
                     auto err = parent->builder->on_bool(true);
                     parent->_stack.pop_back();
                     return err;
                 }
 
-                std::optional<parse_error_t> on_false()noexcept {
+                constexpr std::optional<parse_error_t> on_false()noexcept {
                     auto err = parent->builder->on_bool(false);
                     parent->_stack.pop_back();
                     return err;
                 }
 
-                std::optional<parse_error_t> on_string(const char c)noexcept {
-                    str.push_back(c);
+                constexpr std::optional<parse_error_t> on_string(const char* data, size_t size)noexcept {
+                    str.append(data, size);
                     return {};
                 }
 
-                std::optional<parse_error_t> on_string_begin()noexcept {
+                constexpr std::optional<parse_error_t> on_string_begin()noexcept {
                     return {};
                 }
 
-                std::optional<parse_error_t> on_string_end()noexcept {
+                constexpr std::optional<parse_error_t> on_string_end()noexcept {
                     std::string s;
                     s.swap(str);
                     auto err = parent->builder->on_string(std::move(s));
@@ -1509,7 +1536,7 @@ namespace json {
                     return err;
                 }
 
-                std::optional<parse_error_t> on_null()noexcept {
+                constexpr std::optional<parse_error_t> on_null()noexcept {
                     auto err = parent->builder->on_null();
                     parent->_stack.pop_back();
                     return err;
@@ -1521,7 +1548,7 @@ namespace json {
             };
 
             struct array_parser : parse_functor_base {
-                std::optional<parse_error_t> on_left_square_bracket()noexcept {
+                constexpr std::optional<parse_error_t> on_left_square_bracket()noexcept {
                     auto p = parent;
                     auto err = p->builder->on_array_begin();
                     p->_stack.back() = C_parser{ {}, state_t::parsing_C, p };
@@ -1533,61 +1560,61 @@ namespace json {
             };
 
             struct C_parser : parse_functor_base {
-                std::optional<parse_error_t> on_null()noexcept {
+                constexpr std::optional<parse_error_t> on_null()noexcept {
                     if (state == state_t::parsing_C) {
                         auto p = parent;
                         p->_stack.emplace_back(elements_parser{ {}, state_t::parsing_elements, p });
-                        return p->on_null();
+                        return std::get<elements_parser>(p->_stack.back()).on_null();
                     }
                     return parse_error_t{};
                 }
 
-                std::optional<parse_error_t> on_true()noexcept {
+                constexpr std::optional<parse_error_t> on_true()noexcept {
                     if (state == state_t::parsing_C) {
                         auto p = parent;
                         p->_stack.emplace_back(elements_parser{ {}, state_t::parsing_elements, p });
-                        return p->on_true();
+                        return std::get<elements_parser>(p->_stack.back()).on_true();
                     }
                     return parse_error_t{};
                 }
 
-                std::optional<parse_error_t> on_false()noexcept {
+                constexpr std::optional<parse_error_t> on_false()noexcept {
                     if (state == state_t::parsing_C) {
                         auto p = parent;
                         p->_stack.emplace_back(elements_parser{ {}, state_t::parsing_elements, p });
-                        return p->on_false();
+                        return std::get<elements_parser>(p->_stack.back()).on_false();
                     }
                     return parse_error_t{};
                 }
 
-                std::optional<parse_error_t> on_string_begin()noexcept {
+                constexpr std::optional<parse_error_t> on_string_begin()noexcept {
                     if (state == state_t::parsing_C) {
                         auto p = parent;
                         p->_stack.emplace_back(elements_parser{ {}, state_t::parsing_elements, p });
-                        return p->on_string_begin();
+                        return std::get<elements_parser>(p->_stack.back()).on_string_begin();
                     }
                     return parse_error_t{};
                 }
 
-                std::optional<parse_error_t> on_number_begin(const char c)noexcept {
+                constexpr std::optional<parse_error_t> on_number_begin(const char c)noexcept {
                     if (state == state_t::parsing_C) {
                         auto p = parent;
                         p->_stack.emplace_back(elements_parser{ {}, state_t::parsing_elements, p });
-                        return p->on_number_begin(c);
+                        return std::get<elements_parser>(p->_stack.back()).on_number_begin(c);
                     }
                     return parse_error_t{};
                 }
 
-                std::optional<parse_error_t> on_left_square_bracket()noexcept {
+                constexpr std::optional<parse_error_t> on_left_square_bracket()noexcept {
                     if (state == state_t::parsing_C) {
                         auto p = parent;
                         p->_stack.emplace_back(elements_parser{ {}, state_t::parsing_elements, p });
-                        return p->on_left_square_bracket();
+                        return std::get<elements_parser>(p->_stack.back()).on_left_square_bracket();
                     }
                     return parse_error_t{};
                 }
 
-                std::optional<parse_error_t> on_right_square_bracket()noexcept {
+                constexpr std::optional<parse_error_t> on_right_square_bracket()noexcept {
                     auto p = parent;
                     auto err = p->builder->on_array_end();
                     p->_stack.pop_back();
@@ -1598,11 +1625,11 @@ namespace json {
                     return err;
                 }
 
-                std::optional<parse_error_t> on_left_brace()noexcept {
+                constexpr std::optional<parse_error_t> on_left_brace()noexcept {
                     if (state == state_t::parsing_C) {
                         auto p = parent;
                         p->_stack.emplace_back(elements_parser{ {}, state_t::parsing_elements, p });
-                        return p->on_left_brace();
+                        return std::get<elements_parser>(p->_stack.back()).on_left_brace();
                     }
                     return parse_error_t{};
                 }
@@ -1612,53 +1639,53 @@ namespace json {
             };
 
             struct elements_parser : parse_functor_base {
-                std::optional<parse_error_t> on_null()noexcept {
+                constexpr std::optional<parse_error_t> on_null()noexcept {
                     auto p = parent;
                     p->_stack.back() = D_parser{ {}, state_t::parsing_D, p };
                     p->_stack.emplace_back(value_parser{ {}, state_t::parsing_value, p });
-                    return p->on_null();
+                    return std::get<value_parser>(p->_stack.back()).on_null();
                 }
 
-                std::optional<parse_error_t> on_true()noexcept {
+                constexpr std::optional<parse_error_t> on_true()noexcept {
                     auto p = parent;
                     p->_stack.back() = D_parser{ {}, state_t::parsing_D, p };
                     p->_stack.emplace_back(value_parser{ {}, state_t::parsing_value, p });
-                    return p->on_true();
+                    return std::get<value_parser>(p->_stack.back()).on_true();
                 }
 
-                std::optional<parse_error_t> on_false()noexcept {
+                constexpr std::optional<parse_error_t> on_false()noexcept {
                     auto p = parent;
                     p->_stack.back() = D_parser{ {}, state_t::parsing_D, p };
                     p->_stack.emplace_back(value_parser{ {}, state_t::parsing_value, p });
-                    return p->on_false();
+                    return std::get<value_parser>(p->_stack.back()).on_false();
                 }
 
-                std::optional<parse_error_t> on_string_begin()noexcept {
+                constexpr std::optional<parse_error_t> on_string_begin()noexcept {
                     auto p = parent;
                     p->_stack.back() = D_parser{ {}, state_t::parsing_D, p };
                     p->_stack.emplace_back(value_parser{ {}, state_t::parsing_value, p });
-                    return p->on_string_begin();
+                    return std::get<value_parser>(p->_stack.back()).on_string_begin();
                 }
 
-                std::optional<parse_error_t> on_number_begin(const char c)noexcept {
+                constexpr std::optional<parse_error_t> on_number_begin(const char c)noexcept {
                     auto p = parent;
                     p->_stack.back() = D_parser{ {}, state_t::parsing_D, p };
                     p->_stack.emplace_back(value_parser{ {}, state_t::parsing_value, p });
-                    return p->on_number_begin(c);
+                    return std::get<value_parser>(p->_stack.back()).on_number_begin(c);
                 }
 
-                std::optional<parse_error_t> on_left_square_bracket()noexcept {
+                constexpr std::optional<parse_error_t> on_left_square_bracket()noexcept {
                     auto p = parent;
                     p->_stack.back() = D_parser{ {}, state_t::parsing_D, p };
                     p->_stack.emplace_back(value_parser{ {}, state_t::parsing_value, p });
-                    return p->on_left_square_bracket();
+                    return std::get<value_parser>(p->_stack.back()).on_left_square_bracket();
                 }
 
-                std::optional<parse_error_t> on_left_brace()noexcept {
+                constexpr std::optional<parse_error_t> on_left_brace()noexcept {
                     auto p = parent;
                     p->_stack.back() = D_parser{ {}, state_t::parsing_D, p };
                     p->_stack.emplace_back(value_parser{ {}, state_t::parsing_value, p });
-                    return p->on_left_brace();
+                    return std::get<value_parser>(p->_stack.back()).on_left_brace();
                 }
 
                 state_t state;
@@ -1666,14 +1693,14 @@ namespace json {
             };
 
             struct D_parser : parse_functor_base {
-                std::optional<parse_error_t> on_right_square_bracket()noexcept {
+                constexpr std::optional<parse_error_t> on_right_square_bracket()noexcept {
                     auto p = parent;
                     p->_stack.pop_back();
                     assert(!p->_stack.empty());
                     return p->on_right_square_bracket();
                 }
 
-                std::optional<parse_error_t> on_comma()noexcept {
+                constexpr std::optional<parse_error_t> on_comma()noexcept {
                     auto p = parent;
                     p->_stack.back() = elements_parser{ {}, state_t::parsing_elements, p };
                     return {};
@@ -1700,81 +1727,92 @@ namespace json {
         };
 
         struct document_printer {
-            document_printer(int max_depth = 0)noexcept {}
+            document_printer(int max_depth = 0)noexcept :_max_depth{ max_depth } {}
 
             std::optional<parse_error_t> on_document_begin()noexcept {
-                print_space();
-                std::cout << "document begin\n";
+                // print_space();
+                // std::cout << "document begin\n";
                 ++_depth;
+                if (_depth > _max_depth)
+                    return parse_error_t::too_deep;
                 return {};
             }
 
             std::optional<parse_error_t> on_document_end()noexcept {
                 --_depth;
-                print_space();
-                std::cout << "document end\n";
+                // print_space();
+                // std::cout << "document end\n";
                 return {};
             }
 
             std::optional<parse_error_t> on_object_begin()noexcept {
-                print_space();
-                std::cout << "object begin\n";
+                // print_space();
+                // std::cout << "object begin\n";
                 ++_depth;
+                if (_depth > _max_depth)
+                    return parse_error_t::too_deep;
                 return {};
             }
 
             std::optional<parse_error_t> on_object_end()noexcept {
                 --_depth;
-                print_space();
-                std::cout << "object end\n";
+                // print_space();
+                // std::cout << "object end\n";
                 return {};
             }
 
             std::optional<parse_error_t> on_array_begin()noexcept {
-                print_space();
-                std::cout << "array begin\n";
+                // print_space();
+                // std::cout << "array begin\n";
                 ++_depth;
+                if (_depth > _max_depth)
+                    return parse_error_t::too_deep;
                 return {};
             }
 
             std::optional<parse_error_t> on_array_end()noexcept {
                 --_depth;
-                print_space();
-                std::cout << "array end\n";
+                // print_space();
+                // std::cout << "array end\n";
                 return {};
             }
 
             std::optional<parse_error_t> on_key(std::string key)noexcept {
-                print_space();
-                std::cout << std::format("key:\"{}\"\n", key);
+                // print_space();
+                // std::cout << std::format("key:\"{}\"\n", key);
+                ++_res;
                 return {};
             }
 
             std::optional<parse_error_t> on_string(std::string str)noexcept {
-                print_space();
-                std::cout << std::format("string:\"{}\"\n", str);
+                // print_space();
+                // std::cout << std::format("string:\"{}\"\n", str);
+                ++_res;
                 return {};
             }
 
             std::optional<parse_error_t> on_number(std::string num)noexcept {
-                print_space();
-                std::cout << std::format("number:{}\n", num);
+                // print_space();
+                // std::cout << std::format("number:{}\n", num);
+                ++_res;
                 return {};
             }
 
             std::optional<parse_error_t> on_bool(const bool b)noexcept {
-                print_space();
-                std::cout << std::format("boolean:{}\n", b ? "true" : "false");
+                // print_space();
+                // std::cout << std::format("boolean:{}\n", b ? "true" : "false");
+                ++_res;
                 return {};
             }
 
             std::optional<parse_error_t> on_null()noexcept {
-                print_space();
-                std::cout << "null\n";
+                // print_space();
+                // std::cout << "null\n";
+                ++_res;
                 return {};
             }
 
-            int get()noexcept { return 0; }
+            int get()noexcept { return _res; }
 
             private:
             void print_space()const noexcept {
@@ -1783,6 +1821,8 @@ namespace json {
             }
 
             int _depth = 0;
+            int _max_depth;
+            int _res = 0;
         };
 
     }
@@ -1790,7 +1830,7 @@ namespace json {
 
     struct value {
 
-        value()noexcept = default;
+        constexpr value()noexcept = default;
 
         template<class T>
             requires
@@ -1800,55 +1840,55 @@ namespace json {
             std::constructible_from<std::vector<value>, T> ||
             std::constructible_from<std::map<std::string, value>, T> ||
             std::constructible_from<std::monostate, T>
-            value(T&& x)noexcept :
+            constexpr value(T&& x)noexcept :
             data{ std::forward<T>(x) } {}
 
 
-        value(std::initializer_list<value> arr)noexcept {
+        constexpr value(std::initializer_list<value> arr)noexcept {
             data.emplace<std::vector<value>>(std::move(arr));
         }
 
-        value(std::initializer_list<std::pair<const std::string, value>> obj)noexcept {
+        constexpr value(std::initializer_list<std::pair<const std::string, value>> obj)noexcept {
             data.emplace<std::map<std::string, value>>(std::move(obj));
         }
 
-        value(const value&)noexcept = default;
-        value(value&&)noexcept = default;
+        constexpr value(const value&)noexcept = default;
+        constexpr value(value&&)noexcept = default;
 
-        value& operator=(const value& other)noexcept = default;
-        value& operator=(value&& other)noexcept = default;
+        constexpr value& operator=(const value& other)noexcept = default;
+        constexpr value& operator=(value&& other)noexcept = default;
 
-        value& operator=(std::initializer_list<value> arr)noexcept {
+        constexpr value& operator=(std::initializer_list<value> arr)noexcept {
             data.emplace<std::vector<value>>(std::move(arr));
             return *this;
         }
 
-        value& operator=(std::initializer_list<std::pair<const std::string, value>> obj)noexcept {
+        constexpr value& operator=(std::initializer_list<std::pair<const std::string, value>> obj)noexcept {
             data.emplace<std::map<std::string, value>>(std::move(obj));
             return *this;
         }
 
-        bool is_number()const noexcept {
+        constexpr bool is_number()const noexcept {
             return std::holds_alternative<double>(data);
         }
 
-        bool is_string()const noexcept {
+        constexpr bool is_string()const noexcept {
             return std::holds_alternative<std::string>(data);
         }
 
-        bool is_null()const noexcept {
+        constexpr bool is_null()const noexcept {
             return std::holds_alternative<std::monostate>(data);
         }
 
-        bool is_bool()const noexcept {
+        constexpr bool is_bool()const noexcept {
             return std::holds_alternative<bool>(data);
         }
 
-        bool is_array()const noexcept {
+        constexpr bool is_array()const noexcept {
             return std::holds_alternative<std::vector<value>>(data);
         }
 
-        bool is_object()const noexcept {
+        constexpr bool is_object()const noexcept {
             return std::holds_alternative<std::map<std::string, value>>(data);
         }
 
@@ -1856,7 +1896,7 @@ namespace json {
             return std::get<std::map<std::string, value>>(data);
         }
 
-        const auto& get_object()const {
+        constexpr const auto& get_object()const {
             return std::get<std::map<std::string, value>>(data);
         }
 
@@ -1864,7 +1904,7 @@ namespace json {
             return std::get<std::vector<value>>(data);
         }
 
-        const auto& get_array()const {
+        constexpr const auto& get_array()const {
             return std::get<std::vector<value>>(data);
         }
 
@@ -1872,7 +1912,7 @@ namespace json {
             return std::get<double>(data);
         }
 
-        auto get_number()const {
+        constexpr auto get_number()const {
             return std::get<double>(data);
         }
 
@@ -1880,7 +1920,7 @@ namespace json {
             return std::get<std::string>(data);
         }
 
-        const auto& get_string()const {
+        constexpr const auto& get_string()const {
             return std::get<std::string>(data);
         }
 
@@ -1888,11 +1928,11 @@ namespace json {
             return std::get<bool>(data);
         }
 
-        bool get_bool()const {
+        constexpr bool get_bool()const {
             return std::get<bool>(data);
         }
 
-        std::monostate get_null()const {
+        constexpr std::monostate get_null()const {
             return std::get<std::monostate>(data);
         }
 
@@ -1969,7 +2009,7 @@ namespace json {
             std::swap(data, other.data);
         }
 
-        std::string type()const noexcept {
+        constexpr std::string type()const noexcept {
             if (std::holds_alternative<std::monostate>(data))
                 return "null";
             else if (std::holds_alternative<std::vector<value>>(data))
@@ -2062,6 +2102,7 @@ namespace json {
                     }
                     else if constexpr (std::is_same_v<json::object::iterator, decltype(s)>) {
                         s->second.data.template emplace<json::array>();
+                        std::get<json::array>(s->second.data).reserve(16);
                         _stack.back() = &std::get<json::array>(s->second.data);
                     }
                     }, _stack.back());
@@ -2299,7 +2340,7 @@ namespace json {
         };
     }
 
-    std::expected<std::string, serialize_error_t> to_json(const auto& dom)noexcept {
+    constexpr std::expected<std::string, serialize_error_t> to_json(const auto& dom)noexcept {
         detail::serializer serializer;
         auto err = serializer(dom);
         if (err)
@@ -2308,7 +2349,7 @@ namespace json {
     }
 
     template<Builder B = detail::document_builder>
-    std::expected<decltype(std::declval<B>().get()), parse_error_t> parse(const char* data, size_t size, int depth = 19)noexcept {
+    constexpr std::expected<decltype(std::declval<B>().get()), parse_error_t> parse(const char* data, size_t size, int depth = 19)noexcept {
         B builder{ depth };
         detail::parser parser{ &builder };
         detail::lexer lexer{ &parser };
@@ -2319,14 +2360,14 @@ namespace json {
                 return std::unexpected(*err);
             auto end = lexer.skip_space(data + lexer.bytes, data + size);
             if (end != data + size)
-                return std::unexpected(parse_error_t{});
+                return std::unexpected(parse_error_t::extra_content);
             return builder.get();
         }
-        return std::unexpected(parse_error_t{});
+        return std::unexpected(parse_error_t::early_EOF);
     }
 
     template<Builder B = detail::document_builder>
-    std::expected<decltype(std::declval<B>().get()), parse_error_t> from_file(const std::string& path, size_t buf_size = 4096, int depth = 19)noexcept {
+    constexpr std::expected<decltype(std::declval<B>().get()), parse_error_t> from_file(const std::string& path, size_t buf_size = 4096, int depth = 19)noexcept {
         assert(buf_size > 0);
         assert(!path.empty());
         B builder{ depth };

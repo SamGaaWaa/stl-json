@@ -1,4 +1,4 @@
-./test/test.out: ./test/main.cc 
+./test/test.out: ./test/main.cc ./test/cJSON.c
 	g++ -std=c++23 -DNDEBUG -O3 $^ -o $@
 
 test: ./test/test.out
